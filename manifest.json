@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "WebRTC Analyzer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "視聴中のページにWebRTCの品質メトリクス（解像度・ビットレート・ジッター等）をリアルタイム表示します。",
-  "permissions": ["storage"],
+  "permissions": ["storage", "downloads"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": {
     "service_worker": "src/bg/sw.js"
