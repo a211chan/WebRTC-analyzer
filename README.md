@@ -193,3 +193,20 @@ document.querySelector('[data-wra]').shadowRoot.querySelector('.hud')
 - [#1 再送・フリーズ関連の指標を追加する](https://github.com/a211chan/WebRTC-analyzer/issues/1) — `nackCount` / `pliCount` / `retransmittedPacketsReceived` / `framesDropped` / `totalFreezesDuration`。ロスゼロなのにフリーズする原因を切り分けるために要る
 - [#2 履歴の永続化](https://github.com/a211chan/WebRTC-analyzer/issues/2)
 - [#3 `<video>` 直接フルスクリーンへの対応](https://github.com/a211chan/WebRTC-analyzer/issues/3)
+
+## プライバシー
+
+この拡張は**収集したデータを一切外部へ送信しない**。テレメトリも解析SDKも入っていない（`src/` に `fetch` / `WebSocket` / `sendBeacon` は存在しない）。
+
+- **IPアドレスは収集しない**。ICE candidate は種別（`host` / `srflx` / `relay`）だけを読み、アドレスは触らない
+- **SDP・メディアの中身は扱わない**。`getStats()` の数値のみ
+- `chrome.storage.local` に保存するのは設定と小窓の位置だけ。計測履歴はメモリ上にのみ置き、ページを離れると消える
+- エクスポートは `chrome.downloads` 経由で行う。ページ側から書き出し内容は読めない
+
+なお、WebRTC の利用有無を事前に判別できないため、コンテンツスクリプトは全ページ・全フレームに注入される。非WebRTCページではポーリングを行わず、コストはゼロになる。
+
+## ライセンス
+
+MIT License — [LICENSE](LICENSE) を参照。
+
+WebRTC は本プロジェクトと無関係の一般名称であり、この拡張は Google および W3C とは無関係の非公式ツール。
