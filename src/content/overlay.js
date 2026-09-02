@@ -93,7 +93,15 @@
       rttMs: s.rttMs ?? pc.rttMs ?? null,
       limit: s.limit ?? null, codec: s.codec ?? null,
       state: pc.state, route: pc.route ?? null,
-      availOutBps: pc.availOutBps ?? null, availInBps: pc.availInBps ?? null,
+      /*
+       * availableOutgoingBitrate は candidate-pair の値で、送信が1本も無くても
+       * 既定値（Chrome では 300kbps）が入ってくる。受信専用の接続でこれを載せると
+       * 「送信できる帯域」を測ったように見えて誤読を招くので、送信が無ければ捨てる。
+       * 受信側も同様。availableIncomingBitrate は Chrome がほぼ返さないため、
+       * 多くの場合は元から null になる。
+       */
+      availOutBps: pc.outbound.length ? (pc.availOutBps ?? null) : null,
+      availInBps: pc.inbound.length ? (pc.availInBps ?? null) : null,
     });
 
     const cutoff = now - cfg.historyMinutes * 60000;
@@ -319,8 +327,9 @@
     const conn = metrics(null, [
       { key: 'route', label: 'route', value: pc.route ? pc.route + (pc.protocol ? ` (${pc.protocol})` : '') : null },
       { key: 'rtt', label: 'rtt', value: ms(pc.rttMs), level: rttLv, field: 'rttMs' },
-      { key: 'avail', label: 'avail↑', value: bps(pc.availOutBps), field: 'availOutBps' },
-      { key: 'avail', label: 'avail↓', value: bps(pc.availInBps), field: 'availInBps' },
+      // 該当方向のストリームが無いときは既定値しか返らないので出さない
+      { key: 'avail', label: 'avail↑', value: pc.outbound.length ? bps(pc.availOutBps) : null, field: 'availOutBps' },
+      { key: 'avail', label: 'avail↓', value: pc.inbound.length ? bps(pc.availInBps) : null, field: 'availInBps' },
     ], firstSamples(key));
 
     const streams = [...pc.inbound, ...pc.outbound].map((s) => {

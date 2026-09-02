@@ -94,8 +94,11 @@ CSV は **BOM 付き UTF-8 + CRLF**、日時は `time_local` 列に `YYYY-MM-DD 
 | target | `outbound-rtp.targetBitrate` |
 | limit | `outbound-rtp.qualityLimitationReason`。`cpu` / `bandwidth` なら送信側がボトルネック |
 | src | 送信元の解像度。表示解像度と違えばダウンスケールが効いている |
+| avail↑ / avail↓ | `candidate-pair` の `availableOutgoingBitrate` / `availableIncomingBitrate` |
 
 Δt はポーリングの揺らぎを避けるため、レポート自身の `timestamp` から求めている。再接続や SSRC 変更でカウンタがリセットされて差分が負になったサンプルは破棄する。
+
+**`avail↑` / `avail↓` は該当方向のストリームがあるときだけ出す。** `availableOutgoingBitrate` は candidate-pair の値なので、送信が1本も無くても既定値（Chrome では 300kbps）が返る。受信専用の接続でそのまま表示すると「送信できる帯域を測った」ように見えて誤読を招くため、出さないようにしてある。なお `availableIncomingBitrate` は Chrome がほぼ返さないので、多くの場合は元から空になる。
 
 ## 構成
 
