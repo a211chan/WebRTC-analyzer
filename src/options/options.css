@@ -91,3 +91,38 @@ button.danger:hover { background: #2c1f1e; }
 
 .status { color: var(--accent); font-size: 12px; opacity: 0; transition: opacity 0.15s; }
 .status.on { opacity: 1; }
+
+/* ---- ログ ---- */
+
+.logs { display: flex; flex-direction: column; gap: 1px; margin-bottom: 14px; }
+
+.log {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 14px;
+  align-items: center;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}
+.log:first-child { border-top: 0; padding-top: 0; }
+
+.log-main { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.log-host { font-family: ui-monospace, Menlo, monospace; white-space: nowrap; }
+.log-title {
+  color: var(--dim);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.log-meta {
+  grid-column: 1;
+  color: #6b737e;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.log-acts { grid-column: 2; grid-row: 1 / span 2; display: flex; gap: 6px; }
+.log-acts button { padding: 4px 10px; font-size: 12px; }
+
+.logs-empty { color: #6b737e; font-size: 12px; padding: 2px 0 6px; }
+.logs-foot { display: flex; align-items: center; gap: 14px; }

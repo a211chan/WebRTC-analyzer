@@ -133,6 +133,115 @@
     return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
   }
 
+  // ------------------------------------------------------------ ログ
+
+  /*
+   * 小窓が集めたログは Service Worker が chrome.storage.session に溜めている。
+   * 設定画面は拡張のページなので、そこから直接読めばよい（コンテンツスクリプトは
+   * session 領域に触れないため、溜める側だけが SW を経由している）。
+   *
+   * session 領域はブラウザを閉じると消える。ログがディスクに溜まり続けて
+   * ゴミにならないよう、保持期間はそこまでと決めてある。
+   */
+  const LOG_INDEX = 'logIndex';
+  const LOG_KEY = (tabId) => `log:${tabId}`;
+
+  async function loadLogs() {
+    const all = (await chrome.storage.session.get(LOG_INDEX))[LOG_INDEX] || {};
+    return Object.values(all).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  }
+
+  async function paintLogs() {
+    const list = await loadLogs();
+    const el = $('logs');
+
+    if (!list.length) {
+      el.innerHTML = '<div class="logs-empty">まだログがありません。計測が始まると自動で溜まります。</div>';
+      return;
+    }
+
+    el.innerHTML = list
+      .map(
+        (e) => `
+      <div class="log" data-tab="${escapeHtml(String(e.tabId))}">
+        <div class="log-main">
+          <span class="log-host">${escapeHtml(e.host || 'page')}</span>
+          <span class="log-title">${escapeHtml(e.title || '')}</span>
+        </div>
+        <div class="log-meta">${escapeHtml(span(e))} · ${escapeHtml(String(e.rows || 0))} 行</div>
+        <div class="log-acts">
+          <button data-dl="csv">CSV</button>
+          <button data-dl="json">JSON</button>
+          <button data-del="1" class="danger">削除</button>
+        </div>
+      </div>`
+      )
+      .join('');
+  }
+
+  function span(e) {
+    const from = e.startedAt ? clock(e.startedAt) : '';
+    const to = e.updatedAt ? clock(e.updatedAt) : '';
+    return from && to ? `${from} → ${to}` : from || to || '';
+  }
+
+  function clock(t) {
+    const d = new Date(t);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  }
+
+  async function downloadLog(tabId, kind) {
+    const key = LOG_KEY(tabId);
+    const log = (await chrome.storage.session.get(key))[key];
+    const rows = log ? WRA_EXPORT.rows(Object.values(log.streams || {})) : [];
+    if (!rows.length) {
+      logFlash('このログは既に消えています');
+      await paintLogs();
+      return;
+    }
+
+    const { text, mime } = WRA_EXPORT.build(rows, kind);
+    // ここは拡張のページなので blob URL も拡張の origin で発行される。
+    // 計測対象のページからは見えない。
+    const url = URL.createObjectURL(new Blob([text], { type: mime }));
+    try {
+      await chrome.downloads.download({
+        url,
+        filename: `webrtc-${WRA_EXPORT.fileStamp(log.startedAt || Date.now())}.${kind}`,
+        saveAs: false,
+      });
+      logFlash(`${rows.length} 行を書き出しました`);
+    } catch (e) {
+      logFlash(`保存できませんでした: ${String(e?.message || e)}`);
+    }
+    // 保存の開始後すぐに revoke すると取りこぼすので少し待つ
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
+  async function removeLog(tabId) {
+    const all = (await chrome.storage.session.get(LOG_INDEX))[LOG_INDEX] || {};
+    delete all[tabId];
+    await chrome.storage.session.set({ [LOG_INDEX]: all });
+    await chrome.storage.session.remove(LOG_KEY(tabId));
+    await paintLogs();
+  }
+
+  async function clearLogs() {
+    const list = await loadLogs();
+    await chrome.storage.session.remove([LOG_INDEX, ...list.map((e) => LOG_KEY(e.tabId))]);
+    await paintLogs();
+    logFlash('ログを削除しました');
+  }
+
+  function logFlash(text) {
+    const el = $('logs-status');
+    el.textContent = text;
+    el.classList.add('on');
+    clearTimeout(logFlash.t);
+    logFlash.t = setTimeout(() => el.classList.remove('on'), 2600);
+  }
+
   // ------------------------------------------------------------ 起動
 
   (async () => {
@@ -140,6 +249,7 @@
     buildThresholds();
     cfg = merge(await chrome.storage.local.get(KEYS));
     paint();
+    paintLogs();
 
     document.addEventListener('change', (e) => {
       if (e.target.matches('input')) save();
@@ -150,6 +260,22 @@
       cfg = structuredClone(DEFAULTS);
       paint();
       flash('既定値に戻しました');
+    });
+
+    $('logs').addEventListener('click', (e) => {
+      const row = e.target.closest?.('.log');
+      if (!row) return;
+      const tabId = row.dataset.tab;
+      const kind = e.target.dataset?.dl;
+      if (kind) downloadLog(tabId, kind);
+      else if (e.target.dataset?.del) removeLog(tabId);
+    });
+
+    $('logs-clear').addEventListener('click', clearLogs);
+
+    // 計測中のタブがあれば行数が伸び続ける。開きっぱなしの設定画面も追従させる。
+    chrome.storage.session.onChanged?.addListener((changes) => {
+      if (LOG_INDEX in changes) paintLogs();
     });
   })();
 })();

@@ -67,12 +67,26 @@
   </table>
 </section>
 
+<section>
+  <h2>ログ</h2>
+  <p class="lead">
+    計測中のタブから自動で集めたログ。配信が止まったあとやタブを閉じたあとでも、ここから保存できる。
+    保存先はメモリ上のセッション領域なので、<b>ブラウザを閉じると消える</b>（ディスクには残らない）。
+  </p>
+  <div id="logs" class="logs"></div>
+  <div class="logs-foot">
+    <button id="logs-clear" class="danger">ログをすべて削除</button>
+    <span id="logs-status" class="status"></span>
+  </div>
+</section>
+
 <div class="footer">
   <button id="reset" class="danger">すべて既定値に戻す</button>
   <span id="status" class="status"></span>
 </div>
 
 <script src="../common/config.js"></script>
+<script src="../common/export.js"></script>
 <script src="options.js"></script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "WebRTC Analyzer",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "視聴中のページにWebRTCの品質メトリクス（解像度・ビットレート・ジッター等）をリアルタイム表示します。",
   "permissions": ["storage", "downloads"],
   "host_permissions": ["http://*/*", "https://*/*"],
@@ -33,7 +33,7 @@
     },
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["src/common/config.js", "src/content/overlay-style.js", "src/content/overlay.js"],
+      "js": ["src/common/config.js", "src/common/export.js", "src/content/overlay-style.js", "src/content/overlay.js"],
       "run_at": "document_idle",
       "all_frames": true
     }

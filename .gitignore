@@ -7,3 +7,6 @@
 # Python
 __pycache__/
 *.pyc
+
+# Claude Code のローカル作業ツリー
+.claude/worktrees/

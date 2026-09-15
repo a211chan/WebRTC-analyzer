@@ -24,7 +24,8 @@ example.com · pc1                 connected
 | スパークライン | 各値の直近60秒の推移を折れ線で表示（範囲は変更可） |
 | しきい値アラート | 超えた値の色が変わり、ヘッダーに超過件数が出る |
 | CSV / JSON エクスポート | 計測履歴をファイルに書き出す（障害報告書への添付用） |
-| 設定画面 | 更新間隔・表示項目・しきい値・履歴の保持時間 |
+| ログの取り置き | 集めたログをタブ単位で残し、配信が止まったあとでも設定画面から保存できる（ブラウザを閉じるまで） |
+| 設定画面 | 更新間隔・表示項目・しきい値・履歴の保持時間・ログの保存 |
 
 ## なぜ webrtc-internals をそのまま使わないのか
 
@@ -45,13 +46,13 @@ example.com · pc1                 connected
 | 操作 | 動作 |
 |---|---|
 | ツールバーアイコン | 小窓の表示 / 非表示 |
-| ヘッダーをドラッグ | 位置を移動（保存される） |
+| ヘッダーをドラッグ | 位置を移動（タブごとに記憶。他のタブの小窓は動かない） |
 | `⤓` ボタン | CSV / JSON エクスポート、履歴のクリア |
 | `⚙` ボタン | 設定画面を開く |
 | `–` ボタン | 折りたたみ（保存される） |
 | `×` ボタン | 非表示（アイコンで戻せる） |
 
-WebRTC 接続が無いページには小窓は出ない。接続が切れると 5 秒後に自動で消える。
+WebRTC 接続が無いページには小窓は出ない。接続が切れても、履歴が残っているうちは小窓は開いたままで、書き出しができる（保持時間を過ぎると閉じる）。
 
 ### エクスポート
 
@@ -59,7 +60,15 @@ WebRTC 接続が無いページには小窓は出ない。接続が切れると 
 
 CSV は **BOM 付き UTF-8 + CRLF**、日時は `time_local` 列に `YYYY-MM-DD HH:MM:SS.mmm`（ローカル時刻）で入れてあるので、Excel でそのまま開いて日時として認識される。UTC が要る場合は `time_iso` 列を使う。
 
-履歴はメモリ上にのみ持つ。ページを離れるかリロードすると消えるので、**書き出しは接続中に行うこと**。既定の保持時間は30分。
+小窓が持つ履歴はページのメモリ上にあり、ページを離れるかリロードすると消える。既定の保持時間は30分。
+
+### ログの取り置き
+
+小窓が集めたログは、数秒ごとに Service Worker へ送られ `chrome.storage.session` にタブ単位で溜まる。**配信が止まったあとでも、タブを閉じたあとでも、設定画面の「ログ」から CSV / JSON を保存できる**。列は `⤓` からの書き出しとまったく同じ。
+
+保持は**ブラウザを閉じるまで**。`storage.session` はメモリ上の領域で、ディスクには書かれない。古いログが溜まり続けてゴミにならないよう、意図的にここで区切ってある。上限は 1タブ 6000 行 / 8タブぶんで、超えると古い側から捨てる。
+
+小窓の位置も同じく `storage.session` にタブ単位で持つ。複数のタブで計測しているとき、片方を動かしても他のタブの小窓は動かない。
 
 ### しきい値
 
@@ -111,10 +120,12 @@ src/content/bridge.js        ISOLATED / 全フレーム / document_start
                              下り: 更新間隔を MAIN world へ postMessage
 src/bg/sw.js                 Service Worker
                              トップフレームと報告元フレームへ転送、アイコンで表示ON/OFF
+                             ログの蓄積（storage.session）と小窓の位置のタブ単位の記憶
 src/content/overlay.js       ISOLATED / 全フレーム / document_idle
                              HUD 描画・履歴保持・スパークライン・エクスポート
 src/content/overlay-style.js Shadow DOM に注入する HUD のスタイル
 src/common/config.js         設定の既定値とマージ処理（オーバーレイと設定画面が共有）
+src/common/export.js         CSV / JSON の列定義と組み立て（オーバーレイと設定画面が共有）
 src/options/                 設定画面
 test/                        検証用ページ（後述）
 ```
@@ -186,7 +197,7 @@ document.querySelector('[data-wra]').shadowRoot.querySelector('.hud')
 
 ## 既知の制限
 
-- **履歴はページを離れると消える**。永続化していないため、エクスポートは接続中に行う必要がある（[#2](https://github.com/a211chan/WebRTC-analyzer/issues/2)）
+- **ログはブラウザを閉じると消える**。`chrome.storage.session` に置いており、ディスクには残さない（意図的な設計）
 - **`<video>` 要素そのものがフルスクリーンの場合は重ねられない**。video は子要素を描画しないため。多くのプレーヤーはコンテナ div を全画面にするので通常は問題にならない（[#3](https://github.com/a211chan/WebRTC-analyzer/issues/3)）
 - **Worker 内の `RTCPeerConnection` は捕捉できない**（現行仕様で Worker から WebRTC は使えないため、実質非該当）
 - ページが `document_start` より前に `RTCPeerConnection` を退避することは原理的にできないが、極端な実装のサイトでは捕捉に失敗しうる
@@ -194,7 +205,6 @@ document.querySelector('[data-wra]').shadowRoot.querySelector('.hud')
 ## 検討中
 
 - [#1 再送・フリーズ関連の指標を追加する](https://github.com/a211chan/WebRTC-analyzer/issues/1) — `nackCount` / `pliCount` / `retransmittedPacketsReceived` / `framesDropped` / `totalFreezesDuration`。ロスゼロなのにフリーズする原因を切り分けるために要る
-- [#2 履歴の永続化](https://github.com/a211chan/WebRTC-analyzer/issues/2)
 - [#3 `<video>` 直接フルスクリーンへの対応](https://github.com/a211chan/WebRTC-analyzer/issues/3)
 
 ## プライバシー
@@ -203,7 +213,7 @@ document.querySelector('[data-wra]').shadowRoot.querySelector('.hud')
 
 - **IPアドレスは収集しない**。ICE candidate は種別（`host` / `srflx` / `relay`）だけを読み、アドレスは触らない
 - **SDP・メディアの中身は扱わない**。`getStats()` の数値のみ
-- `chrome.storage.local` に保存するのは設定と小窓の位置だけ。計測履歴はメモリ上にのみ置き、ページを離れると消える
+- `chrome.storage.local`（ディスク）に保存するのは設定だけ。小窓の位置と計測ログは `chrome.storage.session`（メモリ）に置き、ブラウザを閉じると消える
 - エクスポートは `chrome.downloads` 経由で行う。ページ側から書き出し内容は読めない
 
 なお、WebRTC の利用有無を事前に判別できないため、コンテンツスクリプトは全ページ・全フレームに注入される。非WebRTCページではポーリングを行わず、コストはゼロになる。
