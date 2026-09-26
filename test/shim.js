@@ -24,8 +24,11 @@
       local: {
         get(keys) {
           const out = {};
-          for (const k of [].concat(keys)) if (k in store) out[k] = store[k];
+          for (const k of keys == null ? Object.keys(store) : [].concat(keys)) if (k in store) out[k] = store[k];
           return Promise.resolve(out);
+        },
+        getKeys() {
+          return Promise.resolve(Object.keys(store));
         },
         set(obj) {
           const changes = {};
@@ -50,5 +53,14 @@
       },
       onChanged: { addListener: (fn) => changeListeners.push(fn) },
     },
+    downloads: {
+      // 設定画面プレビュー用。実際には保存せず、中身をコンソールに出す
+      download({ url, filename }) {
+        console.log('[shim] download', filename, url.length, 'chars');
+        return Promise.resolve(1);
+      },
+    },
   };
+  // 検証用に中身を覗けるようにしておく
+  window.__shimStore = store;
 })();

@@ -75,6 +75,8 @@
     $('intervalMs').value = cfg.intervalMs;
     $('sparkSeconds').value = cfg.sparkSeconds;
     $('historyMinutes').value = cfg.historyMinutes;
+    $('persist').checked = !!cfg.persist;
+    $('persistHours').value = cfg.persistHours;
     $('sparkline').checked = !!cfg.sparkline;
     $('alerts').checked = !!cfg.alerts;
 
@@ -88,6 +90,7 @@
 
     // スパークラインOFFなら範囲指定は意味がない
     $('sparkSeconds').disabled = !cfg.sparkline;
+    $('persistHours').disabled = !cfg.persist;
   }
 
   // ------------------------------------------------------------ 収集と保存
@@ -98,6 +101,8 @@
     next.intervalMs = clampInt($('intervalMs').value, 200, 10000, DEFAULTS.intervalMs);
     next.sparkSeconds = clampInt($('sparkSeconds').value, 10, 600, DEFAULTS.sparkSeconds);
     next.historyMinutes = clampInt($('historyMinutes').value, 1, 240, DEFAULTS.historyMinutes);
+    next.persist = $('persist').checked;
+    next.persistHours = clampInt($('persistHours').value, 1, 720, DEFAULTS.persistHours);
     next.sparkline = $('sparkline').checked;
     next.alerts = $('alerts').checked;
 
@@ -138,6 +143,59 @@
     return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
   }
 
+  // ------------------------------------------------------------ 保存済みの履歴
+
+  const { listSessions, loadRows, removeSessions, build, dataUrl, filename, localStamp } = WRA_EXPORT;
+  let sessions = [];
+
+  async function paintSessions() {
+    sessions = await listSessions();
+    const tbody = document.querySelector('#sessions tbody');
+    if (!sessions.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="desc">まだありません</td></tr>';
+      return;
+    }
+    tbody.innerHTML = sessions
+      .map(
+        (s, i) => `
+      <tr>
+        <td>${escapeHtml(localStamp(s.start).slice(0, 19))}</td>
+        <td>${escapeHtml(localStamp(s.end).slice(0, 19))}</td>
+        <td class="name">${escapeHtml(s.host)}</td>
+        <td>${s.rows}</td>
+        <td class="ops">
+          <button data-sess="${i}" data-op="csv">CSV</button>
+          <button data-sess="${i}" data-op="json">JSON</button>
+          <button data-sess="${i}" data-op="del" class="danger">削除</button>
+        </td>
+      </tr>`
+      )
+      .join('');
+  }
+
+  async function onSession(e) {
+    const btn = e.target.closest('[data-sess]');
+    if (!btn) return;
+    const s = sessions[Number(btn.dataset.sess)];
+    if (!s) return;
+    const op = btn.dataset.op;
+    if (op === 'del') {
+      await removeSessions([s]);
+      await paintSessions();
+      flash('削除しました');
+      return;
+    }
+    const rows = await loadRows(s);
+    if (!rows.length) {
+      flash('データがありません');
+      return;
+    }
+    const { text, mime } = build(op, rows);
+    // 設定画面は拡張のページなので chrome.downloads を直接呼べる
+    await chrome.downloads.download({ url: dataUrl(text, mime), filename: filename(op, s.start), saveAs: false });
+    flash(`${rows.length} 行を書き出しました`);
+  }
+
   // ------------------------------------------------------------ 起動
 
   (async () => {
@@ -148,6 +206,16 @@
 
     document.addEventListener('change', (e) => {
       if (e.target.matches('input')) save();
+    });
+
+    await paintSessions();
+    document.querySelector('#sessions').addEventListener('click', onSession);
+    $('refreshSessions').addEventListener('click', paintSessions);
+    $('clearSessions').addEventListener('click', async () => {
+      if (!confirm('保存済みの履歴をすべて削除しますか？')) return;
+      await removeSessions(await listSessions());
+      await paintSessions();
+      flash('すべて削除しました');
     });
 
     $('reset').addEventListener('click', async () => {

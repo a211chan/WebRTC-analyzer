@@ -24,7 +24,8 @@ example.com · pc1                 connected
 | スパークライン | 各値の直近60秒の推移を折れ線で表示（範囲は変更可） |
 | しきい値アラート | 超えた値の色が変わり、ヘッダーに超過件数が出る |
 | CSV / JSON エクスポート | 計測履歴をファイルに書き出す（障害報告書への添付用） |
-| 設定画面 | 更新間隔・表示項目・しきい値・履歴の保持時間 |
+| 履歴の保存 | ページを離れても履歴が残り、後から設定画面で書き出せる |
+| 設定画面 | 更新間隔・表示項目・しきい値・履歴の保持時間・保存済み履歴の一覧 |
 
 ## なぜ webrtc-internals をそのまま使わないのか
 
@@ -59,7 +60,16 @@ WebRTC 接続が無いページには小窓は出ない。接続が切れると 
 
 CSV は **BOM 付き UTF-8 + CRLF**、日時は `time_local` 列に `YYYY-MM-DD HH:MM:SS.mmm`（ローカル時刻）で入れてあるので、Excel でそのまま開いて日時として認識される。UTC が要る場合は `time_iso` 列を使う。
 
-履歴はメモリ上にのみ持つ。ページを離れるかリロードすると消えるので、**書き出しは接続中に行うこと**。既定の保持時間は30分。
+小窓から書き出せるのは、そのページで保持している直近30分（設定で変更可）。
+
+### 保存済みの履歴
+
+履歴は10秒ごとに拡張のストレージ（`chrome.storage.local`）へ書き足される。**ページをリロードしたり離れたりしても残る**ので、障害に気づいたときには再生し直していた、という場合でも後から追える。
+
+- 設定画面の「保存済みの履歴」に、ページ単位（リロードごとに別セッション）で一覧が出る。そこから CSV / JSON で書き出す・削除する
+- 最後の記録から24時間（設定で変更可）経ったセッションは自動で消える
+- 目安は 1時間あたり約2MB（映像＋音声の2ストリーム、1秒間隔）。`unlimitedStorage` 権限で容量上限を外してある
+- 設定の「ページを離れても履歴を残す」を OFF にすれば書き出しは行わない
 
 ### しきい値
 
@@ -126,7 +136,8 @@ src/content/overlay.js       ISOLATED / 全フレーム / document_idle
                              HUD 描画・履歴保持・スパークライン・エクスポート
 src/content/overlay-style.js Shadow DOM に注入する HUD のスタイル
 src/common/config.js         設定の既定値とマージ処理（オーバーレイと設定画面が共有）
-src/options/                 設定画面
+src/common/export.js         CSV / JSON の組み立てと履歴の永続化（オーバーレイと設定画面が共有）
+src/options/                 設定画面・保存済み履歴の一覧
 test/                        検証用ページ（後述）
 ```
 
@@ -197,14 +208,12 @@ document.querySelector('[data-wra]').shadowRoot.querySelector('.hud')
 
 ## 既知の制限
 
-- **履歴はページを離れると消える**。永続化していないため、エクスポートは接続中に行う必要がある（[#2](https://github.com/a211chan/WebRTC-analyzer/issues/2)）
 - **`<video>` 要素そのものがフルスクリーンの場合は重ねられない**。video は子要素を描画しないため。多くのプレーヤーはコンテナ div を全画面にするので通常は問題にならない（[#3](https://github.com/a211chan/WebRTC-analyzer/issues/3)）
 - **Worker 内の `RTCPeerConnection` は捕捉できない**（現行仕様で Worker から WebRTC は使えないため、実質非該当）
 - ページが `document_start` より前に `RTCPeerConnection` を退避することは原理的にできないが、極端な実装のサイトでは捕捉に失敗しうる
 
 ## 検討中
 
-- [#2 履歴の永続化](https://github.com/a211chan/WebRTC-analyzer/issues/2)
 - [#3 `<video>` 直接フルスクリーンへの対応](https://github.com/a211chan/WebRTC-analyzer/issues/3)
 
 ## プライバシー
@@ -213,7 +222,7 @@ document.querySelector('[data-wra]').shadowRoot.querySelector('.hud')
 
 - **IPアドレスは収集しない**。ICE candidate は種別（`host` / `srflx` / `relay`）だけを読み、アドレスは触らない
 - **SDP・メディアの中身は扱わない**。`getStats()` の数値のみ
-- `chrome.storage.local` に保存するのは設定と小窓の位置だけ。計測履歴はメモリ上にのみ置き、ページを離れると消える
+- `chrome.storage.local` に保存するのは設定・小窓の位置・計測履歴。履歴に載るのはホスト名と上記の数値だけで、URL のパスやクエリは残さない。拡張の外には出ず、期限（既定24時間）が来れば自動で消える。設定画面から即時に全削除もできる
 - エクスポートは `chrome.downloads` 経由で行う。ページ側から書き出し内容は読めない
 
 なお、WebRTC の利用有無を事前に判別できないため、コンテンツスクリプトは全ページ・全フレームに注入される。非WebRTCページではポーリングを行わず、コストはゼロになる。

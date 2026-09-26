@@ -100,7 +100,43 @@
 
     const cutoff = now - cfg.historyMinutes * 60000;
     while (h.samples.length && h.samples[0].t < cutoff) h.samples.shift();
+
+    if (IS_TOP && cfg.persist) {
+      persist.metas[key] = h.meta;
+      persist.rows.push([key, h.samples[h.samples.length - 1]]);
+      if (!persist.timer) persist.timer = setTimeout(flush, PERSIST_MS);
+    }
   }
+
+  // ------------------------------------------------------------- 永続化
+
+  /*
+   * 履歴はメモリ上にもあるが、ページを離れると消える。障害に気づいた時点で
+   * 再生し直していても事後に追えるよう、トップフレームだけが一定間隔で
+   * chrome.storage.local へ差分を書き足す（子フレームのぶんもトップに集約済み）。
+   * 1ページ = 1セッション。一覧とエクスポートは設定画面から行う。
+   */
+  const PERSIST_MS = 10000;
+  const persist = { session: null, metas: {}, rows: [], timer: null };
+
+  function flush() {
+    persist.timer = null;
+    if (!persist.rows.length) return;
+    if (!persist.session) {
+      persist.session = { id: WRA_EXPORT.newSessionId(), host: location.host || 'page', start: Date.now(), end: 0, rows: 0, chunks: 0 };
+      // 新しいセッションを始めるついでに、保持期限を過ぎたものを掃除する
+      WRA_EXPORT.prune(cfg.persistHours).catch(() => {});
+    }
+    const { metas, rows } = persist;
+    persist.metas = {};
+    persist.rows = [];
+    WRA_EXPORT.writeChunk(persist.session, metas, rows).catch(() => {
+      // 拡張の再読み込み直後など。取りこぼしは許容する（メモリ上の履歴は残っている）
+    });
+  }
+
+  // 離脱時に残りを書く。完了を待てないので最善努力
+  addEventListener('pagehide', flush);
 
   function streamKey(entryKey, s) {
     return `${entryKey}|${s.dir}|${s.kind}|${s.rid ?? ''}`;
@@ -216,7 +252,7 @@
     else if (act === 'json') exportFile('json');
     else if (act === 'clear') {
       history.clear();
-      note('履歴をクリアしました');
+      note('履歴をクリアしました（保存済みの履歴は設定画面から消せます）');
     }
   }
 
@@ -495,37 +531,6 @@
 
   // ------------------------------------------------------------- エクスポート
 
-  const COLS = [
-    ['time_local', (m, s) => localStamp(s.t)],
-    ['time_iso', (m, s) => new Date(s.t).toISOString()],
-    ['host', (m) => m.host],
-    ['pc', (m) => m.pcId],
-    ['direction', (m) => (m.dir === 'in' ? 'inbound' : 'outbound')],
-    ['kind', (m) => m.kind],
-    ['rid', (m) => m.rid],
-    ['codec', (m, s) => s.codec],
-    ['width', (m, s) => s.w],
-    ['height', (m, s) => s.h],
-    ['fps', (m, s) => round(s.fps, 1)],
-    ['bitrate_bps', (m, s) => round(s.bps, 0)],
-    ['target_bps', (m, s) => round(s.targetBps, 0)],
-    ['jitter_ms', (m, s) => round(s.jitterMs, 2)],
-    ['jitter_buffer_ms', (m, s) => round(s.jbMs, 1)],
-    ['loss_pct', (m, s) => round(s.lossPct, 3)],
-    ['freeze_count', (m, s) => s.freezes],
-    ['freeze_duration_ms', (m, s) => round(s.freezeMs, 0)],
-    ['nack_count', (m, s) => s.nack],
-    ['retransmitted_packets', (m, s) => s.rtx],
-    ['pli_count', (m, s) => s.pli],
-    ['frames_dropped', (m, s) => s.dropped],
-    ['rtt_ms', (m, s) => round(s.rttMs, 2)],
-    ['quality_limitation', (m, s) => s.limit],
-    ['avail_out_bps', (m, s) => round(s.availOutBps, 0)],
-    ['avail_in_bps', (m, s) => round(s.availInBps, 0)],
-    ['route', (m, s) => s.route],
-    ['state', (m, s) => s.state],
-  ];
-
   function allRows() {
     const rows = [];
     for (const h of history.values()) for (const s of h.samples) rows.push({ meta: h.meta, s });
@@ -540,19 +545,7 @@
       return;
     }
 
-    let text;
-    let mime;
-    if (kind === 'csv') {
-      const lines = [COLS.map((c) => c[0]).join(',')];
-      for (const { meta, s } of rows) lines.push(COLS.map((c) => csvCell(c[1](meta, s))).join(','));
-      // BOM(U+FEFF) + CRLF。Excel で開いたときに文字化けせず、行も崩れない。
-      text = '\uFEFF' + lines.join('\r\n');
-      mime = 'text/csv;charset=utf-8';
-    } else {
-      const out = rows.map(({ meta, s }) => Object.fromEntries(COLS.map((c) => [c[0], c[1](meta, s) ?? null])));
-      text = JSON.stringify(out, null, 1);
-      mime = 'application/json';
-    }
+    const { text, mime } = WRA_EXPORT.build(kind, rows);
 
     /*
      * ページの DOM に <a href="blob:..."> を挿してクリックする方法は使わない。
@@ -565,53 +558,14 @@
       .sendMessage({
         __wraChannel: CHANNEL,
         type: 'download',
-        url: dataUrl(text, mime),
-        filename: `webrtc-${fileStamp()}.${kind}`,
+        url: WRA_EXPORT.dataUrl(text, mime),
+        filename: WRA_EXPORT.filename(kind),
       })
       .then((res) => {
         if (res && res.ok) note(`${rows.length} 行を書き出しました`);
         else note(`保存できませんでした: ${res?.error ?? '不明なエラー'}`);
       })
       .catch(() => note('保存できませんでした。拡張を再読み込みしてください'));
-  }
-
-  /** UTF-8 の文字列を data: URL にする。chrome.downloads は data: を受け付ける */
-  function dataUrl(text, mime) {
-    const bytes = new TextEncoder().encode(text);
-    let bin = '';
-    // 一度に渡すと引数が多すぎて RangeError になるので分割して詰める
-    for (let i = 0; i < bytes.length; i += 0x8000) {
-      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-    }
-    return `data:${mime};base64,${btoa(bin)}`;
-  }
-
-  function csvCell(v) {
-    if (v == null) return '';
-    const s = String(v);
-    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  }
-
-  function round(v, digits) {
-    return typeof v === 'number' && Number.isFinite(v) ? +v.toFixed(digits) : null;
-  }
-
-  function pad(n, w = 2) {
-    return String(n).padStart(w, '0');
-  }
-
-  /** Excel がそのまま日時として解釈できる形式 */
-  function localStamp(t) {
-    const d = new Date(t);
-    return (
-      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
-      `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`
-    );
-  }
-
-  function fileStamp() {
-    const d = new Date();
-    return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
   }
 
   // ------------------------------------------------------------- 整形
