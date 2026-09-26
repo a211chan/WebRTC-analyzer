@@ -1,20 +1,6 @@
-# WebRTC Analyzer
+![WebRTC Analyzer](store/images/promo-marquee-1400x560.png)
 
 視聴中のページの上に小窓（HUD）を重ね、WebRTC の品質メトリクスをリアルタイム表示する Chrome 拡張。
-
-```
-WEBRTC ANALYZER            ⚠ 1  ⧉ ⤓ ⚙ – ×
-example.com · pc1                 connected
-  route                     host→srflx (udp)
-  rtt      ╭─╮╭──╮                   24.0 ms
-  avail↑   ──╯  ╰─                  2.50 Mbps
-↓ video 1920×1080 30fps                 H264
-  bitrate  ╭──╮╭─╮                  2.48 Mbps
-  jitter   ─╯  ╰─╯                     3.2 ms
-  loss     ────╯╰─                    0.12 %
-  buffer   ╭╮╭───╮                   328.0 ms   ← しきい値超過は色が変わる
-  freeze   ─╯╰╯                            0
-```
 
 ## できること
 
