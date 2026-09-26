@@ -39,6 +39,12 @@
       rtt: true,
       limit: true,
       src: true,
+      // 再送・フリーズの切り分け用。小窓が縦に伸びるので既定では出さない
+      nack: false,
+      pli: false,
+      rtx: false,
+      dropped: false,
+      freezeDur: false,
     },
 
     /*

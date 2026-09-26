@@ -221,6 +221,7 @@
     const dRecv = d('packetsReceived');
     const dJbDelay = d('jitterBufferDelay');
     const dJbCount = d('jitterBufferEmittedCount');
+    const dFreezeSec = d('totalFreezesDuration');
 
     return {
       dir: 'in',
@@ -234,6 +235,16 @@
       jbMs: dJbDelay !== null && dJbCount ? (dJbDelay / dJbCount) * 1000 : null,
       lossPct: dLost !== null && dRecv !== null && dLost + dRecv > 0 ? (dLost / (dLost + dRecv)) * 100 : null,
       freezes: num(s.freezeCount) ? s.freezeCount : null,
+      /*
+       * 再送・フリーズ関連。いずれも直近1サンプルでの増分。
+       * RTX/NACK で回復したパケットは packetsLost に載らないので、loss 0% のまま
+       * フリーズする場合はここを見て「遅延起因か / 供給側か / 描画側か」を切り分ける。
+       */
+      nack: d('nackCount'),
+      pli: d('pliCount'),
+      rtx: d('retransmittedPacketsReceived'),
+      dropped: d('framesDropped'),
+      freezeMs: dFreezeSec !== null ? dFreezeSec * 1000 : null,
       codec: byId.get(s.codecId)?.mimeType ?? null,
     };
   }

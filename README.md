@@ -89,11 +89,25 @@ CSV は **BOM 付き UTF-8 + CRLF**、日時は `time_local` 列に `YYYY-MM-DD 
 | buffer | `jitterBufferDelay ÷ jitterBufferEmittedCount`。実効遅延で、jitter より体感に近い |
 | loss | `packetsLost ÷ (packetsLost + packetsReceived)` の差分比 |
 | freeze | `freezeCount` |
+| frz time | `totalFreezesDuration` の増分（直近1サンプルでフリーズしていた時間） |
+| nack | `nackCount` の増分。再送要求の発生回数 |
+| rtx | `retransmittedPacketsReceived` の増分。再送で回復したパケット数 |
+| pli | `pliCount` の増分。キーフレーム要求の発生回数 |
+| dropped | `framesDropped` の増分。デコード後に表示を捨てたフレーム数 |
 | route | `transport.selectedCandidatePairId` を辿った先の `candidateType`。`relay` なら TURN 経由 |
 | rtt | `candidate-pair.currentRoundTripTime`（送信側は `remote-inbound-rtp.roundTripTime`） |
 | target | `outbound-rtp.targetBitrate` |
 | limit | `outbound-rtp.qualityLimitationReason`。`cpu` / `bandwidth` なら送信側がボトルネック |
 | src | 送信元の解像度。表示解像度と違えばダウンスケールが効いている |
+
+`frz time` / `nack` / `rtx` / `pli` / `dropped` は小窓が縦に伸びすぎるため既定では非表示（設定画面の「表示項目」で有効化する。エクスポートには常に入る）。RTX/NACK で回復したパケットは `packetsLost` に載らないので、**loss 0% なのにフリーズする**ときの切り分けに使う。
+
+| 増えているもの | 読み方 |
+|---|---|
+| `nack` / `rtx` | 再送で回復している＝遅れて届いてフレームの期限に間に合っていない。ネットワーク経路の問題 |
+| どれも増えずに freeze | 供給側（エンコーダ / CDN）がデータを出していない |
+| `pli` | キーフレーム待ちで固まっている |
+| `dropped` | 届いてはいるが表示が間に合っていない。デコード / 描画側 |
 
 Δt はポーリングの揺らぎを避けるため、レポート自身の `timestamp` から求めている。再接続や SSRC 変更でカウンタがリセットされて差分が負になったサンプルは破棄する。
 
@@ -190,7 +204,6 @@ document.querySelector('[data-wra]').shadowRoot.querySelector('.hud')
 
 ## 検討中
 
-- [#1 再送・フリーズ関連の指標を追加する](https://github.com/a211chan/WebRTC-analyzer/issues/1) — `nackCount` / `pliCount` / `retransmittedPacketsReceived` / `framesDropped` / `totalFreezesDuration`。ロスゼロなのにフリーズする原因を切り分けるために要る
 - [#2 履歴の永続化](https://github.com/a211chan/WebRTC-analyzer/issues/2)
 - [#3 `<video>` 直接フルスクリーンへの対応](https://github.com/a211chan/WebRTC-analyzer/issues/3)
 

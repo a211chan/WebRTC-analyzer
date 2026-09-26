@@ -25,6 +25,11 @@
     rtt: 'rtt（往復遅延）',
     limit: 'limit（送信品質の制限理由）',
     src: 'src（送信元解像度）',
+    nack: 'nack（再送要求の回数）',
+    pli: 'pli（キーフレーム要求の回数）',
+    rtx: 'rtx（再送で回復したパケット数）',
+    dropped: 'dropped（表示を捨てたフレーム数）',
+    freezeDur: 'freeze時間（フリーズの長さ）',
   };
 
   /** しきい値の行定義 */

@@ -89,6 +89,8 @@
       bps: s.bps, targetBps: s.targetBps ?? null,
       jitterMs: s.jitterMs, jbMs: s.jbMs ?? null,
       lossPct: s.lossPct, freezes: s.freezes ?? null,
+      nack: s.nack ?? null, pli: s.pli ?? null, rtx: s.rtx ?? null,
+      dropped: s.dropped ?? null, freezeMs: s.freezeMs ?? null,
       // 送信は remote-inbound-rtp 由来のRTT、受信はPC全体のRTTを使う
       rttMs: s.rttMs ?? pc.rttMs ?? null,
       limit: s.limit ?? null, codec: s.codec ?? null,
@@ -361,6 +363,12 @@
             { key: 'loss', label: 'loss', value: pct(s.lossPct), level: lossLv, field: 'lossPct' },
             { key: 'buffer', label: 'buffer', value: ms(s.jbMs), level: bufferLv, field: 'jbMs' },
             { key: 'freeze', label: 'freeze', value: s.freezes != null ? String(s.freezes) : null, level: freezeLv, field: 'freezes' },
+            // 以下は直近1サンプルでの増分。loss 0% なのに固まる原因の切り分けに使う
+            { key: 'freezeDur', label: 'frz time', value: ms(s.freezeMs), level: s.freezeMs > 0 ? 'warn' : '', field: 'freezeMs' },
+            { key: 'nack', label: 'nack', value: count(s.nack), field: 'nack' },
+            { key: 'rtx', label: 'rtx', value: count(s.rtx), field: 'rtx' },
+            { key: 'pli', label: 'pli', value: count(s.pli), level: s.pli > 0 ? 'warn' : '', field: 'pli' },
+            { key: 'dropped', label: 'dropped', value: count(s.dropped), level: s.dropped > 0 ? 'warn' : '', field: 'dropped' },
           ]
         : [
             { key: 'bitrate', label: 'bitrate', value: bps(s.bps), field: 'bps' },
@@ -505,6 +513,11 @@
     ['jitter_buffer_ms', (m, s) => round(s.jbMs, 1)],
     ['loss_pct', (m, s) => round(s.lossPct, 3)],
     ['freeze_count', (m, s) => s.freezes],
+    ['freeze_duration_ms', (m, s) => round(s.freezeMs, 0)],
+    ['nack_count', (m, s) => s.nack],
+    ['retransmitted_packets', (m, s) => s.rtx],
+    ['pli_count', (m, s) => s.pli],
+    ['frames_dropped', (m, s) => s.dropped],
     ['rtt_ms', (m, s) => round(s.rttMs, 2)],
     ['quality_limitation', (m, s) => s.limit],
     ['avail_out_bps', (m, s) => round(s.availOutBps, 0)],
@@ -613,6 +626,10 @@
   function ms(v) {
     if (v == null) return null;
     return (v >= 100 ? Math.round(v) : v.toFixed(1)) + ' ms';
+  }
+
+  function count(v) {
+    return v == null ? null : String(v);
   }
 
   function pct(v) {
