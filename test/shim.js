@@ -9,10 +9,23 @@
   const msgListeners = [];
   const changeListeners = [];
   const store = Object.create(null);
+  let ui = null;
 
   window.chrome = {
     runtime: {
       sendMessage(msg) {
+        // sw.js の応答が要るものは、ここで代わりに返す
+        if (msg?.type === 'download') {
+          console.log('[shim] download', msg.filename, msg.url.length, 'bytes (data URL)');
+          return Promise.resolve({ ok: true });
+        }
+        // 小窓の位置。実物は storage.session にタブ単位で持つ
+        if (msg?.type === 'ui-get') return Promise.resolve(ui);
+        if (msg?.type === 'ui-set') {
+          ui = { pos: msg.pos || null };
+          return Promise.resolve();
+        }
+
         // sw.js と同じ振る舞い: frameId を付けて折り返す
         const payload = { ...msg, frameId: 0 };
         setTimeout(() => msgListeners.forEach((fn) => fn(payload, { tab: { id: 1 }, frameId: 0 }, () => {})), 0);

@@ -27,19 +27,23 @@
 
 ツールバーのアイコンをクリックすると小窓の表示 / 非表示が切り替わる。
 
+読み込んだ時点で開いていたタブにはコンテンツスクリプトが入らないので、計測したいタブは一度リロードすること。
+
+`file://` で開いたページでは動かない。拡張の既定で「ファイルの URL へのアクセス」が無効なためで、アイコンのメニューに「サイトのデータを読み取れないか、変更できません」と出る。検証ページは `test/serve.py` 経由（`http://127.0.0.1:...`）で開く。
+
 ## 使い方
 
 | 操作 | 動作 |
 |---|---|
 | ツールバーアイコン | 小窓の表示 / 非表示 |
-| ヘッダーをドラッグ | 位置を移動（保存される） |
+| ヘッダーをドラッグ | 位置を移動（タブごとに記憶。他のタブの小窓は動かない） |
 | `⧉` ボタン | 小窓を別ウィンドウ（Document Picture-in-Picture）に出す。もう一度押すか窓を閉じると戻る |
 | `⤓` ボタン | CSV / JSON エクスポート、履歴のクリア |
 | `⚙` ボタン | 設定画面を開く |
 | `–` ボタン | 折りたたみ（保存される） |
 | `×` ボタン | 非表示（アイコンで戻せる） |
 
-WebRTC 接続が無いページには小窓は出ない。接続が切れると 5 秒後に自動で消える。
+WebRTC 接続が無いページには小窓は出ない。接続が切れても、履歴が残っているうちは小窓は開いたままで、書き出しができる（保持時間を過ぎると閉じる）。
 
 ### エクスポート
 
@@ -96,6 +100,7 @@ CSV は **BOM 付き UTF-8 + CRLF**、日時は `time_local` 列に `YYYY-MM-DD 
 | target | `outbound-rtp.targetBitrate` |
 | limit | `outbound-rtp.qualityLimitationReason`。`cpu` / `bandwidth` なら送信側がボトルネック |
 | src | 送信元の解像度。表示解像度と違えばダウンスケールが効いている |
+| avail↑ / avail↓ | `candidate-pair` の `availableOutgoingBitrate` / `availableIncomingBitrate` |
 
 `frz time` / `nack` / `rtx` / `pli` / `dropped` は小窓が縦に伸びすぎるため既定では非表示（設定画面の「表示項目」で有効化する。エクスポートには常に入る）。RTX/NACK で回復したパケットは `packetsLost` に載らないので、**loss 0% なのにフリーズする**ときの切り分けに使う。
 
@@ -108,6 +113,8 @@ CSV は **BOM 付き UTF-8 + CRLF**、日時は `time_local` 列に `YYYY-MM-DD 
 
 Δt はポーリングの揺らぎを避けるため、レポート自身の `timestamp` から求めている。再接続や SSRC 変更でカウンタがリセットされて差分が負になったサンプルは破棄する。
 
+**`avail↑` / `avail↓` は該当方向のストリームがあるときだけ出す。** `availableOutgoingBitrate` は candidate-pair の値なので、送信が1本も無くても既定値（Chrome では 300kbps）が返る。受信専用の接続でそのまま表示すると「送信できる帯域を測った」ように見えて誤読を招くため、出さないようにしてある。なお `availableIncomingBitrate` は Chrome がほぼ返さないので、多くの場合は元から空になる。
+
 ## 構成
 
 ```
@@ -118,7 +125,8 @@ src/content/bridge.js        ISOLATED / 全フレーム / document_start
                              上り: メトリクスを Service Worker へ中継
                              下り: 更新間隔を MAIN world へ postMessage
 src/bg/sw.js                 Service Worker
-                             トップフレームと報告元フレームへ転送、アイコンで表示ON/OFF
+                             トップフレームと報告元フレームへ転送、アイコンで表示ON/OFF、
+                             小窓の位置のタブ単位の記憶（storage.session）
 src/content/overlay.js       ISOLATED / 全フレーム / document_idle
                              HUD 描画・履歴保持・スパークライン・エクスポート
 src/content/overlay-style.js Shadow DOM に注入する HUD のスタイル
@@ -207,7 +215,7 @@ document.querySelector('[data-wra]').shadowRoot.querySelector('.hud')
 
 - **IPアドレスは収集しない**。ICE candidate は種別（`host` / `srflx` / `relay`）だけを読み、アドレスは触らない
 - **SDP・メディアの中身は扱わない**。`getStats()` の数値のみ
-- `chrome.storage.local` に保存するのは設定・小窓の位置・計測履歴。履歴に載るのはホスト名と上記の数値だけで、URL のパスやクエリは残さない。拡張の外には出ず、期限（既定24時間）が来れば自動で消える。設定画面から即時に全削除もできる
+- `chrome.storage.local` に保存するのは設定と計測履歴。小窓の位置は `chrome.storage.session`（メモリ）にタブ単位で置き、ブラウザを閉じると消える。履歴に載るのはホスト名と上記の数値だけで、URL のパスやクエリは残さない。拡張の外には出ず、期限（既定24時間）が来れば自動で消える。設定画面から即時に全削除もできる
 - エクスポートは `chrome.downloads` 経由で行う。ページ側から書き出し内容は読めない
 
 なお、WebRTC の利用有無を事前に判別できないため、コンテンツスクリプトは全ページ・全フレームに注入される。非WebRTCページではポーリングを行わず、コストはゼロになる。

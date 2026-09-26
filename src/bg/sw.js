@@ -1,18 +1,24 @@
 /*
  * WebRTC Analyzer — Service Worker
  *
- * 役割は2つだけ。
+ * 役割は3つ。
  *   1. 各フレームの bridge.js から届いたメトリクスを、描画すべきフレームへ転送する
  *   2. ツールバーアイコンのクリックで表示ON/OFFを切り替える
+ *   3. 小窓の位置をタブ単位で覚える
  *
- * SW は非アクティブ化されるので状態を持たせない設計にしてある。
- * 表示ON/OFFは chrome.storage.local に置き、各フレームは storage.onChanged で追従する。
+ * SW は非アクティブ化されるので、状態はすべて chrome.storage に置く。
+ *   - 表示ON/OFFと設定 : storage.local（全タブ共通。各フレームは onChanged で追従する）
+ *   - 小窓の位置       : storage.session（タブ単位。ブラウザを閉じると消える）
+ * 計測履歴の永続化は小窓（overlay.js）が storage.local へ直接書くので、ここは関与しない。
  */
 
 const CHANNEL = 'webrtc-analyzer';
 
 /** 自分で組み立てたファイル名だけを通す。ページ由来の文字列をパスに使わない。 */
 const FILENAME = /^webrtc-\d{8}-\d{6}\.(csv|json)$/;
+
+/** 小窓の位置。タブごとに1件 */
+const UI_KEY = (tabId) => `ui:${tabId}`;
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.__wraChannel !== CHANNEL) return;
@@ -29,9 +35,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // 非同期で応答する
   }
 
-  if (msg.type !== 'stats') return;
-
   const tabId = sender.tab?.id;
+
+  // 小窓の位置。タブ単位で持つ。全タブ共通にすると、片方を動かしただけで
+  // 別タブの小窓まで一緒に動いてしまう。
+  if (msg.type === 'ui-get') {
+    if (tabId == null) return;
+    chrome.storage.session.get(UI_KEY(tabId)).then((v) => sendResponse(v[UI_KEY(tabId)] || null));
+    return true;
+  }
+  if (msg.type === 'ui-set') {
+    if (tabId == null) return;
+    chrome.storage.session.set({ [UI_KEY(tabId)]: { pos: msg.pos || null } }).catch(() => {});
+    return;
+  }
+
+  if (msg.type !== 'stats') return;
   if (tabId == null) return;
 
   const payload = { ...msg, frameId: sender.frameId ?? 0 };
@@ -67,6 +86,11 @@ function send(tabId, payload, frameId) {
     // 該当フレームにオーバーレイが未注入 / 遷移直後などは黙って捨てる
   });
 }
+
+// 位置はタブに紐づく意味しかないので、タブを閉じたら捨てる
+chrome.tabs.onRemoved.addListener((tabId) => {
+  chrome.storage.session.remove(UI_KEY(tabId)).catch(() => {});
+});
 
 chrome.action.onClicked.addListener(async () => {
   const { enabled = true } = await chrome.storage.local.get('enabled');
