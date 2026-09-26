@@ -3,7 +3,7 @@
 視聴中のページの上に小窓（HUD）を重ね、WebRTC の品質メトリクスをリアルタイム表示する Chrome 拡張。
 
 ```
-WEBRTC ANALYZER              ⚠ 1  ⤓ ⚙ – ×
+WEBRTC ANALYZER            ⚠ 1  ⧉ ⤓ ⚙ – ×
 example.com · pc1                 connected
   route                     host→srflx (udp)
   rtt      ╭─╮╭──╮                   24.0 ms
@@ -47,6 +47,7 @@ example.com · pc1                 connected
 |---|---|
 | ツールバーアイコン | 小窓の表示 / 非表示 |
 | ヘッダーをドラッグ | 位置を移動（保存される） |
+| `⧉` ボタン | 小窓を別ウィンドウ（Document Picture-in-Picture）に出す。もう一度押すか窓を閉じると戻る |
 | `⤓` ボタン | CSV / JSON エクスポート、履歴のクリア |
 | `⚙` ボタン | 設定画面を開く |
 | `–` ボタン | 折りたたみ（保存される） |
@@ -157,7 +158,7 @@ MAIN world からは `chrome.storage` を読めないため、更新間隔だけ
 - **`all_frames: true`** — 配信プレーヤーは iframe 埋め込みが多く、`RTCPeerConnection` は子フレーム側にある。
 - **Proxy の `construct` トラップ** — `RTCPeerConnection` は ES class なので、関数を自前定義して `prototype` を代入する古い手法では `new.target` 周りで壊れる。Proxy ならプロトタイプチェーン・`instanceof`・静的メソッドが素通りする。
 - **Service Worker 経由の中継** — MAIN world から `window.top.postMessage` で親に送る手もあるが、クロスオリジンでは `targetOrigin: '*'` が必要になりメトリクスがページ側のスクリプトから読めてしまう。
-- **フルスクリーン対応** — `position: fixed` はトップレイヤーの下に潜るため、`fullscreenchange` を監視して HUD をフルスクリーン要素の配下へ移す。相手が `<iframe>` の場合は親から重ねられないので、その iframe 自身のオーバーレイが担当する（overlay.js を全フレームで動かしているのはこのため）。
+- **フルスクリーン対応** — `position: fixed` はトップレイヤーの下に潜るため、`fullscreenchange` を監視して HUD をフルスクリーン要素の配下へ移す。相手が `<iframe>` の場合は親から重ねられないので、その iframe 自身のオーバーレイが担当する（overlay.js を全フレームで動かしているのはこのため）。`<video>` 要素そのものが全画面になった場合は、video が子要素を描画しないためどこにも重ねられない。これは `⧉` で HUD を Document Picture-in-Picture の別ウィンドウ（常に最前面）へ移して回避する。`requestWindow()` はユーザー操作起点でしか呼べないので、全画面にする前に押しておく必要がある。
 
 ## 検証
 
@@ -176,6 +177,8 @@ python3 test/serve.py
 | http://localhost:8731/test/loopback.html | 拡張を読み込んだ状態で開く。右上に小窓が出れば成功 |
 | http://localhost:8731/test/standalone.html | 拡張なしで収集と描画だけを検証（`test/shim.js` が chrome.* を代替） |
 | http://localhost:8731/test/options-preview.html | 拡張なしで設定画面を検証 |
+
+loopback / standalone の「video を直接全画面」ボタンは、`<video>` 要素そのものを全画面にするプレーヤーの再現用。
 
 カメラ / マイクの許可は不要。canvas の映像とオシレータの音を同一ページ内でループバックする。
 `window.__loopback.pc1` / `.pc2` から生 stats を直接叩ける。
@@ -208,13 +211,9 @@ document.querySelector('[data-wra]').shadowRoot.querySelector('.hud')
 
 ## 既知の制限
 
-- **`<video>` 要素そのものがフルスクリーンの場合は重ねられない**。video は子要素を描画しないため。多くのプレーヤーはコンテナ div を全画面にするので通常は問題にならない（[#3](https://github.com/a211chan/WebRTC-analyzer/issues/3)）
+- **`<video>` 要素そのものがフルスクリーンの場合、ページ内の小窓は消える**。video は子要素を描画しないため。全画面にする前に `⧉` で別ウィンドウに出しておけば見える。多くのプレーヤーはコンテナ div を全画面にするので通常は問題にならない
 - **Worker 内の `RTCPeerConnection` は捕捉できない**（現行仕様で Worker から WebRTC は使えないため、実質非該当）
 - ページが `document_start` より前に `RTCPeerConnection` を退避することは原理的にできないが、極端な実装のサイトでは捕捉に失敗しうる
-
-## 検討中
-
-- [#3 `<video>` 直接フルスクリーンへの対応](https://github.com/a211chan/WebRTC-analyzer/issues/3)
 
 ## プライバシー
 

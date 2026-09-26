@@ -33,6 +33,20 @@ var WRA_STYLE = `
 /* スパークライン表示時は折れ線1本ぶん横に広げる */
 .hud.spark { min-width: 272px; }
 
+/* 別ウィンドウ（Document PiP）内ではウィンドウいっぱいに広げる */
+.hud.pip {
+  position: static;
+  width: 100%;
+  max-width: none;
+  min-height: 100vh;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: rgb(18, 20, 24);
+}
+.hud.pip header { cursor: default; }
+.hud.pip .body { max-height: calc(100vh - 32px); }
+
 .hud.collapsed .body,
 .hud.collapsed .menu { display: none; }
 

@@ -41,6 +41,9 @@
   let hostEl = null;
   let menuEl = null;
   let ticking = null;
+  /** Document Picture-in-Picture で開いた別ウィンドウ。null なら通常のページ内表示 */
+  let pipWin = null;
+  const CAN_PIP = IS_TOP && 'documentPictureInPicture' in window;
 
   // ------------------------------------------------------------- 受信
 
@@ -175,10 +178,13 @@
 
   function shouldShow() {
     if (!cfg.enabled) return false;
+    // 別ウィンドウに出しているあいだはページの全画面状態に左右されない
+    if (pipWin) return live().length > 0;
 
     const fs = fullscreenEl();
     // <video> や <iframe> は子要素を描画しないので、その上には重ねられない。
     // iframe が全画面なら、その iframe 自身のオーバーレイが担当する。
+    // <video> の場合はどのフレームからも重ねられないので、⧉ で別ウィンドウに出してもらう。
     if (fs && (fs.tagName === 'VIDEO' || fs.tagName === 'IFRAME')) return false;
     // 子フレームは全画面のときだけ出る（通常時はトップの小窓と二重になる）
     if (!IS_TOP && !fs) return false;
@@ -214,6 +220,7 @@
       <header>
         <span class="title">WebRTC Analyzer</span>
         <span class="alarm" hidden></span>
+        ${CAN_PIP ? '<button data-act="pip" title="別ウィンドウに出す（動画を直接全画面にするプレーヤーでも見える）">⧉</button>' : ''}
         <button data-act="export"   title="エクスポート">⤓</button>
         <button data-act="options"  title="設定">⚙</button>
         <button data-act="collapse" title="折りたたみ">–</button>
@@ -248,6 +255,7 @@
     else if (act === 'close') chrome.storage.local.set({ enabled: false });
     else if (act === 'options') chrome.runtime.sendMessage({ __wraChannel: CHANNEL, type: 'open-options' });
     else if (act === 'export') menuEl.hidden = !menuEl.hidden;
+    else if (act === 'pip') togglePip();
     else if (act === 'csv') exportFile('csv');
     else if (act === 'json') exportFile('json');
     else if (act === 'clear') {
@@ -263,11 +271,45 @@
     note.t = setTimeout(() => (el.textContent = ''), 4000);
   }
 
+  /*
+   * Document Picture-in-Picture。<video> 要素そのものが全画面になると、
+   * video は子要素を描画しないためページ内のどこにも小窓を重ねられない。
+   * 常に最前面に出る別ウィンドウへ小窓ごと移しておけば、全画面の上にも見える。
+   * requestWindow() はユーザー操作起点でしか呼べないので、ボタンで開く。
+   */
+  async function togglePip() {
+    if (pipWin) {
+      pipWin.close();
+      return;
+    }
+    try {
+      const w = await documentPictureInPicture.requestWindow({ width: 320, height: 420 });
+      w.document.title = 'WebRTC Analyzer';
+      w.document.body.style.cssText = 'margin:0;background:#121418;';
+      // 閉じられたらページ内の表示に戻す
+      w.addEventListener('pagehide', () => {
+        pipWin = null;
+        hud.classList.remove('pip');
+        applyState();
+        render();
+      });
+      pipWin = w;
+      hud.classList.add('pip');
+      menuEl.hidden = true;
+      render();
+    } catch (_) {
+      note('別ウィンドウを開けませんでした');
+    }
+  }
+
   function applyState() {
     hud.classList.toggle('collapsed', collapsed);
     hud.classList.toggle('spark', !!cfg.sparkline);
     if (collapsed) menuEl.hidden = true;
-    if (pos) {
+    if (pipWin) {
+      // 別ウィンドウ内ではウィンドウ自体を動かすので、位置指定は使わない
+      hud.style.left = hud.style.top = hud.style.right = '';
+    } else if (pos) {
       hud.style.left = clamp(pos.left, 0, Math.max(0, innerWidth - 120)) + 'px';
       hud.style.top = clamp(pos.top, 0, Math.max(0, innerHeight - 28)) + 'px';
       hud.style.right = 'auto';
@@ -287,7 +329,7 @@
     let dy = 0;
 
     handle.addEventListener('pointerdown', (e) => {
-      if (e.target.tagName === 'BUTTON') return;
+      if (e.target.tagName === 'BUTTON' || pipWin) return;
       const r = hud.getBoundingClientRect();
       dx = e.clientX - r.left;
       dy = e.clientY - r.top;
@@ -325,7 +367,7 @@
     if (!hostEl) build();
 
     // フルスクリーン要素があればその配下へ移す（トップレイヤーに入れるため）
-    const parent = fullscreenEl() || document.documentElement;
+    const parent = pipWin ? pipWin.document.body : fullscreenEl() || document.documentElement;
     if (hostEl.parentNode !== parent) parent.appendChild(hostEl);
 
     const entries = live().sort(
