@@ -8,3 +8,6 @@
 __pycache__/
 *.pyc
 dist/
+
+# Claude Code のローカル作業ツリー
+.claude/worktrees/

@@ -19,6 +19,8 @@
   /** これだけ更新が途絶えたPCは表示から落とす */
   const STALE_MS = 5000;
   const RENDER_MS = 500;
+  /** 受信が途切れている間の描画間隔。値は動かないので落としてよい */
+  const IDLE_MS = 5000;
   /*
    * Map の要素数の上限。bridge.js が形を検証しても、ページ側は pc.id を変えながら
    * 送り続けることで別キーを無限に作れる。最終的な保持数はここで頭打ちにする。
@@ -41,6 +43,7 @@
   let hostEl = null;
   let menuEl = null;
   let ticking = null;
+  let tickMs = 0;
   /** Document Picture-in-Picture で開いた別ウィンドウ。null なら通常のページ内表示 */
   let pipWin = null;
   const CAN_PIP = IS_TOP && 'documentPictureInPicture' in window;
@@ -65,7 +68,7 @@
       store.set(key, { pc, host, at: now });
       for (const s of [...pc.inbound, ...pc.outbound]) record(frameId, host, pc, s, now);
     }
-    if (!ticking) ticking = setInterval(render, RENDER_MS);
+    tick(RENDER_MS);
   });
 
   /** key が未登録で満杯なら、いちばん古い項目を捨てて枠を空ける（Map は挿入順） */
@@ -98,7 +101,15 @@
       rttMs: s.rttMs ?? pc.rttMs ?? null,
       limit: s.limit ?? null, codec: s.codec ?? null,
       state: pc.state, route: pc.route ?? null,
-      availOutBps: pc.availOutBps ?? null, availInBps: pc.availInBps ?? null,
+      /*
+       * availableOutgoingBitrate は candidate-pair の値で、送信が1本も無くても
+       * 既定値（Chrome では 300kbps）が入ってくる。受信専用の接続でこれを載せると
+       * 「送信できる帯域」を測ったように見えて誤読を招くので、送信が無ければ捨てる。
+       * 受信側も同様。availableIncomingBitrate は Chrome がほぼ返さないため、
+       * 多くの場合は元から null になる。
+       */
+      availOutBps: pc.outbound.length ? (pc.availOutBps ?? null) : null,
+      availInBps: pc.inbound.length ? (pc.availInBps ?? null) : null,
     });
 
     const cutoff = now - cfg.historyMinutes * 60000;
@@ -153,16 +164,27 @@
     render();
   });
 
-  chrome.storage.local.get(['collapsed', 'pos']).then((v) => {
+  chrome.storage.local.get('collapsed').then((v) => {
     collapsed = v.collapsed === true;
-    pos = v.pos || null;
     if (hud) applyState();
   });
+
+  /*
+   * 小窓の位置は storage.local に置かない。local は全タブ共通なので、片方のタブで
+   * 動かすと storage.onChanged が他のタブにも飛び、開いている小窓がいっせいに
+   * 同じ場所へ移動してしまう。位置は Service Worker がタブ単位で覚える。
+   */
+  chrome.runtime
+    .sendMessage({ __wraChannel: CHANNEL, type: 'ui-get' })
+    .then((v) => {
+      pos = v?.pos || null;
+      if (hud) applyState();
+    })
+    .catch(() => {});
 
   chrome.storage.onChanged.addListener(async (changes, area) => {
     if (area !== 'local') return;
     if (changes.collapsed) collapsed = changes.collapsed.newValue === true;
-    if (changes.pos) pos = changes.pos.newValue || null;
     if (WRA_CONFIG.KEYS.some((k) => k in changes)) cfg = await WRA_CONFIG.load();
     if (hud) applyState();
     render();
@@ -179,7 +201,7 @@
   function shouldShow() {
     if (!cfg.enabled) return false;
     // 別ウィンドウに出しているあいだはページの全画面状態に左右されない
-    if (pipWin) return live().length > 0;
+    if (pipWin) return live().length > 0 || history.size > 0;
 
     const fs = fullscreenEl();
     // <video> や <iframe> は子要素を描画しないので、その上には重ねられない。
@@ -189,7 +211,9 @@
     // 子フレームは全画面のときだけ出る（通常時はトップの小窓と二重になる）
     if (!IS_TOP && !fs) return false;
 
-    return live().length > 0;
+    // 配信が止まっても、履歴が残っているうちは閉じない。止まった瞬間に消えると
+    // 肝心の「落ちたときのログ」を保存できないまま小窓が無くなってしまう。
+    return live().length > 0 || history.size > 0;
   }
 
   function live() {
@@ -346,7 +370,7 @@
     function onUp(e) {
       handle.removeEventListener('pointermove', onMove);
       handle.releasePointerCapture(e.pointerId);
-      if (pos) chrome.storage.local.set({ pos });
+      if (pos) chrome.runtime.sendMessage({ __wraChannel: CHANNEL, type: 'ui-set', pos }).catch(() => {});
     }
   }
 
@@ -357,10 +381,7 @@
 
     if (!show) {
       if (hostEl && hostEl.parentNode) hostEl.remove();
-      if (!store.size && ticking) {
-        clearInterval(ticking);
-        ticking = null;
-      }
+      if (!store.size) idle();
       return;
     }
 
@@ -381,11 +402,43 @@
       return r.html;
     });
 
-    body.innerHTML = html.join('') || '<div class="empty">no active connection</div>';
+    body.innerHTML = html.join('') || stopped();
 
     const alarm = hud.querySelector('.alarm');
     alarm.hidden = !(cfg.alerts && alarms > 0);
     alarm.textContent = alarms > 0 ? `⚠ ${alarms}` : '';
+
+    // 受信が途切れたら描画を緩める。小窓自体は履歴を保存できるよう残したまま。
+    if (!store.size) idle();
+  }
+
+  function tick(ms) {
+    if (tickMs === ms) return;
+    if (ticking) clearInterval(ticking);
+    tickMs = ms;
+    ticking = ms ? setInterval(render, ms) : null;
+  }
+
+  /*
+   * 受信が止まったあとの後始末。履歴が保持期間を過ぎて空になったら、そこで
+   * ようやく小窓を閉じてタイマーも止める。保存する時間は十分に残る。
+   */
+  function idle() {
+    prune();
+    tick(history.size ? IDLE_MS : 0);
+  }
+
+  function prune() {
+    const cutoff = Date.now() - cfg.historyMinutes * 60000;
+    for (const [k, h] of history) {
+      while (h.samples.length && h.samples[0].t < cutoff) h.samples.shift();
+      if (!h.samples.length) history.delete(k);
+    }
+  }
+
+  function stopped() {
+    if (!history.size) return '<div class="empty">no active connection</div>';
+    return '<div class="empty">配信が停止しました。<br>⤓ から、または設定画面の「保存済みの履歴」から書き出せます。</div>';
   }
 
   function renderPc(key, entry) {
@@ -399,8 +452,8 @@
     const conn = metrics(null, [
       { key: 'route', label: 'route', value: pc.route ? pc.route + (pc.protocol ? ` (${pc.protocol})` : '') : null },
       { key: 'rtt', label: 'rtt', value: ms(pc.rttMs), level: rttLv, field: 'rttMs' },
-      { key: 'avail', label: 'avail↑', value: bps(pc.availOutBps), field: 'availOutBps' },
-      { key: 'avail', label: 'avail↓', value: bps(pc.availInBps), field: 'availInBps' },
+      { key: 'avail', label: 'avail↑', value: pc.outbound.length ? bps(pc.availOutBps) : null, field: 'availOutBps' },
+      { key: 'avail', label: 'avail↓', value: pc.inbound.length ? bps(pc.availInBps) : null, field: 'availInBps' },
     ], firstSamples(key));
 
     const streams = [...pc.inbound, ...pc.outbound].map((s) => {
