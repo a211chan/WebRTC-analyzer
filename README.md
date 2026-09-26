@@ -3,7 +3,7 @@
 視聴中のページの上に小窓（HUD）を重ね、WebRTC の品質メトリクスをリアルタイム表示する Chrome 拡張。
 
 ```
-WEBRTC ANALYZER              ⚠ 1  ⤓ ⚙ – ×
+WEBRTC ANALYZER            ⚠ 1  ⧉ ⤓ ⚙ – ×
 example.com · pc1                 connected
   route                     host→srflx (udp)
   rtt      ╭─╮╭──╮                   24.0 ms
@@ -24,7 +24,8 @@ example.com · pc1                 connected
 | スパークライン | 各値の直近60秒の推移を折れ線で表示（範囲は変更可） |
 | しきい値アラート | 超えた値の色が変わり、ヘッダーに超過件数が出る |
 | CSV / JSON エクスポート | 計測履歴をファイルに書き出す（障害報告書への添付用） |
-| 設定画面 | 更新間隔・表示項目・しきい値・履歴の保持時間 |
+| 履歴の保存 | ページを離れても履歴が残り、後から設定画面で書き出せる |
+| 設定画面 | 更新間隔・表示項目・しきい値・履歴の保持時間・保存済み履歴の一覧 |
 
 ## なぜ webrtc-internals をそのまま使わないのか
 
@@ -46,6 +47,7 @@ example.com · pc1                 connected
 |---|---|
 | ツールバーアイコン | 小窓の表示 / 非表示 |
 | ヘッダーをドラッグ | 位置を移動（保存される） |
+| `⧉` ボタン | 小窓を別ウィンドウ（Document Picture-in-Picture）に出す。もう一度押すか窓を閉じると戻る |
 | `⤓` ボタン | CSV / JSON エクスポート、履歴のクリア |
 | `⚙` ボタン | 設定画面を開く |
 | `–` ボタン | 折りたたみ（保存される） |
@@ -59,7 +61,16 @@ WebRTC 接続が無いページには小窓は出ない。接続が切れると 
 
 CSV は **BOM 付き UTF-8 + CRLF**、日時は `time_local` 列に `YYYY-MM-DD HH:MM:SS.mmm`（ローカル時刻）で入れてあるので、Excel でそのまま開いて日時として認識される。UTC が要る場合は `time_iso` 列を使う。
 
-履歴はメモリ上にのみ持つ。ページを離れるかリロードすると消えるので、**書き出しは接続中に行うこと**。既定の保持時間は30分。
+小窓から書き出せるのは、そのページで保持している直近30分（設定で変更可）。
+
+### 保存済みの履歴
+
+履歴は10秒ごとに拡張のストレージ（`chrome.storage.local`）へ書き足される。**ページをリロードしたり離れたりしても残る**ので、障害に気づいたときには再生し直していた、という場合でも後から追える。
+
+- 設定画面の「保存済みの履歴」に、ページ単位（リロードごとに別セッション）で一覧が出る。そこから CSV / JSON で書き出す・削除する
+- 最後の記録から24時間（設定で変更可）経ったセッションは自動で消える
+- 目安は 1時間あたり約2MB（映像＋音声の2ストリーム、1秒間隔）。`unlimitedStorage` 権限で容量上限を外してある
+- 設定の「ページを離れても履歴を残す」を OFF にすれば書き出しは行わない
 
 ### しきい値
 
@@ -89,11 +100,25 @@ CSV は **BOM 付き UTF-8 + CRLF**、日時は `time_local` 列に `YYYY-MM-DD 
 | buffer | `jitterBufferDelay ÷ jitterBufferEmittedCount`。実効遅延で、jitter より体感に近い |
 | loss | `packetsLost ÷ (packetsLost + packetsReceived)` の差分比 |
 | freeze | `freezeCount` |
+| frz time | `totalFreezesDuration` の増分（直近1サンプルでフリーズしていた時間） |
+| nack | `nackCount` の増分。再送要求の発生回数 |
+| rtx | `retransmittedPacketsReceived` の増分。再送で回復したパケット数 |
+| pli | `pliCount` の増分。キーフレーム要求の発生回数 |
+| dropped | `framesDropped` の増分。デコード後に表示を捨てたフレーム数 |
 | route | `transport.selectedCandidatePairId` を辿った先の `candidateType`。`relay` なら TURN 経由 |
 | rtt | `candidate-pair.currentRoundTripTime`（送信側は `remote-inbound-rtp.roundTripTime`） |
 | target | `outbound-rtp.targetBitrate` |
 | limit | `outbound-rtp.qualityLimitationReason`。`cpu` / `bandwidth` なら送信側がボトルネック |
 | src | 送信元の解像度。表示解像度と違えばダウンスケールが効いている |
+
+`frz time` / `nack` / `rtx` / `pli` / `dropped` は小窓が縦に伸びすぎるため既定では非表示（設定画面の「表示項目」で有効化する。エクスポートには常に入る）。RTX/NACK で回復したパケットは `packetsLost` に載らないので、**loss 0% なのにフリーズする**ときの切り分けに使う。
+
+| 増えているもの | 読み方 |
+|---|---|
+| `nack` / `rtx` | 再送で回復している＝遅れて届いてフレームの期限に間に合っていない。ネットワーク経路の問題 |
+| どれも増えずに freeze | 供給側（エンコーダ / CDN）がデータを出していない |
+| `pli` | キーフレーム待ちで固まっている |
+| `dropped` | 届いてはいるが表示が間に合っていない。デコード / 描画側 |
 
 Δt はポーリングの揺らぎを避けるため、レポート自身の `timestamp` から求めている。再接続や SSRC 変更でカウンタがリセットされて差分が負になったサンプルは破棄する。
 
@@ -112,7 +137,8 @@ src/content/overlay.js       ISOLATED / 全フレーム / document_idle
                              HUD 描画・履歴保持・スパークライン・エクスポート
 src/content/overlay-style.js Shadow DOM に注入する HUD のスタイル
 src/common/config.js         設定の既定値とマージ処理（オーバーレイと設定画面が共有）
-src/options/                 設定画面
+src/common/export.js         CSV / JSON の組み立てと履歴の永続化（オーバーレイと設定画面が共有）
+src/options/                 設定画面・保存済み履歴の一覧
 test/                        検証用ページ（後述）
 ```
 
@@ -132,7 +158,7 @@ MAIN world からは `chrome.storage` を読めないため、更新間隔だけ
 - **`all_frames: true`** — 配信プレーヤーは iframe 埋め込みが多く、`RTCPeerConnection` は子フレーム側にある。
 - **Proxy の `construct` トラップ** — `RTCPeerConnection` は ES class なので、関数を自前定義して `prototype` を代入する古い手法では `new.target` 周りで壊れる。Proxy ならプロトタイプチェーン・`instanceof`・静的メソッドが素通りする。
 - **Service Worker 経由の中継** — MAIN world から `window.top.postMessage` で親に送る手もあるが、クロスオリジンでは `targetOrigin: '*'` が必要になりメトリクスがページ側のスクリプトから読めてしまう。
-- **フルスクリーン対応** — `position: fixed` はトップレイヤーの下に潜るため、`fullscreenchange` を監視して HUD をフルスクリーン要素の配下へ移す。相手が `<iframe>` の場合は親から重ねられないので、その iframe 自身のオーバーレイが担当する（overlay.js を全フレームで動かしているのはこのため）。
+- **フルスクリーン対応** — `position: fixed` はトップレイヤーの下に潜るため、`fullscreenchange` を監視して HUD をフルスクリーン要素の配下へ移す。相手が `<iframe>` の場合は親から重ねられないので、その iframe 自身のオーバーレイが担当する（overlay.js を全フレームで動かしているのはこのため）。`<video>` 要素そのものが全画面になった場合は、video が子要素を描画しないためどこにも重ねられない。これは `⧉` で HUD を Document Picture-in-Picture の別ウィンドウ（常に最前面）へ移して回避する。`requestWindow()` はユーザー操作起点でしか呼べないので、全画面にする前に押しておく必要がある。
 
 ## 検証
 
@@ -151,6 +177,8 @@ python3 test/serve.py
 | http://localhost:8731/test/loopback.html | 拡張を読み込んだ状態で開く。右上に小窓が出れば成功 |
 | http://localhost:8731/test/standalone.html | 拡張なしで収集と描画だけを検証（`test/shim.js` が chrome.* を代替） |
 | http://localhost:8731/test/options-preview.html | 拡張なしで設定画面を検証 |
+
+loopback / standalone の「video を直接全画面」ボタンは、`<video>` 要素そのものを全画面にするプレーヤーの再現用。
 
 カメラ / マイクの許可は不要。canvas の映像とオシレータの音を同一ページ内でループバックする。
 `window.__loopback.pc1` / `.pc2` から生 stats を直接叩ける。
@@ -183,16 +211,9 @@ document.querySelector('[data-wra]').shadowRoot.querySelector('.hud')
 
 ## 既知の制限
 
-- **履歴はページを離れると消える**。永続化していないため、エクスポートは接続中に行う必要がある（[#2](https://github.com/a211chan/WebRTC-analyzer/issues/2)）
-- **`<video>` 要素そのものがフルスクリーンの場合は重ねられない**。video は子要素を描画しないため。多くのプレーヤーはコンテナ div を全画面にするので通常は問題にならない（[#3](https://github.com/a211chan/WebRTC-analyzer/issues/3)）
+- **`<video>` 要素そのものがフルスクリーンの場合、ページ内の小窓は消える**。video は子要素を描画しないため。全画面にする前に `⧉` で別ウィンドウに出しておけば見える。多くのプレーヤーはコンテナ div を全画面にするので通常は問題にならない
 - **Worker 内の `RTCPeerConnection` は捕捉できない**（現行仕様で Worker から WebRTC は使えないため、実質非該当）
 - ページが `document_start` より前に `RTCPeerConnection` を退避することは原理的にできないが、極端な実装のサイトでは捕捉に失敗しうる
-
-## 検討中
-
-- [#1 再送・フリーズ関連の指標を追加する](https://github.com/a211chan/WebRTC-analyzer/issues/1) — `nackCount` / `pliCount` / `retransmittedPacketsReceived` / `framesDropped` / `totalFreezesDuration`。ロスゼロなのにフリーズする原因を切り分けるために要る
-- [#2 履歴の永続化](https://github.com/a211chan/WebRTC-analyzer/issues/2)
-- [#3 `<video>` 直接フルスクリーンへの対応](https://github.com/a211chan/WebRTC-analyzer/issues/3)
 
 ## プライバシー
 
@@ -200,7 +221,7 @@ document.querySelector('[data-wra]').shadowRoot.querySelector('.hud')
 
 - **IPアドレスは収集しない**。ICE candidate は種別（`host` / `srflx` / `relay`）だけを読み、アドレスは触らない
 - **SDP・メディアの中身は扱わない**。`getStats()` の数値のみ
-- `chrome.storage.local` に保存するのは設定と小窓の位置だけ。計測履歴はメモリ上にのみ置き、ページを離れると消える
+- `chrome.storage.local` に保存するのは設定・小窓の位置・計測履歴。履歴に載るのはホスト名と上記の数値だけで、URL のパスやクエリは残さない。拡張の外には出ず、期限（既定24時間）が来れば自動で消える。設定画面から即時に全削除もできる
 - エクスポートは `chrome.downloads` 経由で行う。ページ側から書き出し内容は読めない
 
 なお、WebRTC の利用有無を事前に判別できないため、コンテンツスクリプトは全ページ・全フレームに注入される。非WebRTCページではポーリングを行わず、コストはゼロになる。

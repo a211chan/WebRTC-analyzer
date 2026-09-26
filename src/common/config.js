@@ -20,6 +20,10 @@
     sparkSeconds: 60,
     /** エクスポート用に履歴を保持する分数 */
     historyMinutes: 30,
+    /** 履歴を chrome.storage.local に書き出し、ページを離れても残すか */
+    persist: true,
+    /** 書き出した履歴を残す時間。最後の書き込みからこれだけ経つと消す */
+    persistHours: 24,
     /** しきい値による色分けを行うか */
     alerts: true,
 
@@ -39,6 +43,12 @@
       rtt: true,
       limit: true,
       src: true,
+      // 再送・フリーズの切り分け用。小窓が縦に伸びるので既定では出さない
+      nack: false,
+      pli: false,
+      rtx: false,
+      dropped: false,
+      freezeDur: false,
     },
 
     /*

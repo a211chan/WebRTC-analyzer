@@ -9,6 +9,7 @@
 <script src="../src/inject/patch.js"></script>
 <script src="shim.js"></script>
 <script src="../src/common/config.js"></script>
+<script src="../src/common/export.js"></script>
 <script src="../src/content/bridge.js"></script>
 <script src="../src/content/overlay-style.js"></script>
 <script src="../src/content/overlay.js"></script>
@@ -26,7 +27,7 @@
 
 <div class="stage">
   <figure><canvas id="src" width="640" height="360"></canvas><figcaption>送信元 (canvas 640×360 / 30fps)</figcaption></figure>
-  <figure><video id="dst" autoplay playsinline muted></video><figcaption>受信映像</figcaption></figure>
+  <figure><video id="dst" autoplay playsinline muted></video><figcaption>受信映像 <button id="fsVideo" title="#3 の再現用。&lt;video&gt; 要素そのものを requestFullscreen() する">video を直接全画面</button></figcaption></figure>
 </div>
 
 <div id="log">初期化中...</div>

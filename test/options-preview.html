@@ -21,7 +21,7 @@
   const doc = new DOMParser().parseFromString(html, 'text/html');
   document.body.innerHTML = doc.body.innerHTML;
 
-  for (const src of ['../src/common/config.js', '../src/options/options.js']) {
+  for (const src of ['../src/common/config.js', '../src/common/export.js', '../src/options/options.js']) {
     await new Promise((resolve, reject) => {
       const s = document.createElement('script');
       s.src = src;

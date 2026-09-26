@@ -69,4 +69,9 @@
     pc2.onconnectionstatechange = report;
     report();
   })().catch((e) => log('失敗: ' + e));
+
+  // #3 の再現用。コンテナではなく <video> 要素そのものを全画面にする素朴なプレーヤーを模す
+  document.getElementById('fsVideo')?.addEventListener('click', () => {
+    document.getElementById('dst').requestFullscreen();
+  });
 })();

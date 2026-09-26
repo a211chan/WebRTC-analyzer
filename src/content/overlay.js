@@ -41,6 +41,9 @@
   let hostEl = null;
   let menuEl = null;
   let ticking = null;
+  /** Document Picture-in-Picture で開いた別ウィンドウ。null なら通常のページ内表示 */
+  let pipWin = null;
+  const CAN_PIP = IS_TOP && 'documentPictureInPicture' in window;
 
   // ------------------------------------------------------------- 受信
 
@@ -89,6 +92,8 @@
       bps: s.bps, targetBps: s.targetBps ?? null,
       jitterMs: s.jitterMs, jbMs: s.jbMs ?? null,
       lossPct: s.lossPct, freezes: s.freezes ?? null,
+      nack: s.nack ?? null, pli: s.pli ?? null, rtx: s.rtx ?? null,
+      dropped: s.dropped ?? null, freezeMs: s.freezeMs ?? null,
       // 送信は remote-inbound-rtp 由来のRTT、受信はPC全体のRTTを使う
       rttMs: s.rttMs ?? pc.rttMs ?? null,
       limit: s.limit ?? null, codec: s.codec ?? null,
@@ -98,7 +103,43 @@
 
     const cutoff = now - cfg.historyMinutes * 60000;
     while (h.samples.length && h.samples[0].t < cutoff) h.samples.shift();
+
+    if (IS_TOP && cfg.persist) {
+      persist.metas[key] = h.meta;
+      persist.rows.push([key, h.samples[h.samples.length - 1]]);
+      if (!persist.timer) persist.timer = setTimeout(flush, PERSIST_MS);
+    }
   }
+
+  // ------------------------------------------------------------- 永続化
+
+  /*
+   * 履歴はメモリ上にもあるが、ページを離れると消える。障害に気づいた時点で
+   * 再生し直していても事後に追えるよう、トップフレームだけが一定間隔で
+   * chrome.storage.local へ差分を書き足す（子フレームのぶんもトップに集約済み）。
+   * 1ページ = 1セッション。一覧とエクスポートは設定画面から行う。
+   */
+  const PERSIST_MS = 10000;
+  const persist = { session: null, metas: {}, rows: [], timer: null };
+
+  function flush() {
+    persist.timer = null;
+    if (!persist.rows.length) return;
+    if (!persist.session) {
+      persist.session = { id: WRA_EXPORT.newSessionId(), host: location.host || 'page', start: Date.now(), end: 0, rows: 0, chunks: 0 };
+      // 新しいセッションを始めるついでに、保持期限を過ぎたものを掃除する
+      WRA_EXPORT.prune(cfg.persistHours).catch(() => {});
+    }
+    const { metas, rows } = persist;
+    persist.metas = {};
+    persist.rows = [];
+    WRA_EXPORT.writeChunk(persist.session, metas, rows).catch(() => {
+      // 拡張の再読み込み直後など。取りこぼしは許容する（メモリ上の履歴は残っている）
+    });
+  }
+
+  // 離脱時に残りを書く。完了を待てないので最善努力
+  addEventListener('pagehide', flush);
 
   function streamKey(entryKey, s) {
     return `${entryKey}|${s.dir}|${s.kind}|${s.rid ?? ''}`;
@@ -137,10 +178,13 @@
 
   function shouldShow() {
     if (!cfg.enabled) return false;
+    // 別ウィンドウに出しているあいだはページの全画面状態に左右されない
+    if (pipWin) return live().length > 0;
 
     const fs = fullscreenEl();
     // <video> や <iframe> は子要素を描画しないので、その上には重ねられない。
     // iframe が全画面なら、その iframe 自身のオーバーレイが担当する。
+    // <video> の場合はどのフレームからも重ねられないので、⧉ で別ウィンドウに出してもらう。
     if (fs && (fs.tagName === 'VIDEO' || fs.tagName === 'IFRAME')) return false;
     // 子フレームは全画面のときだけ出る（通常時はトップの小窓と二重になる）
     if (!IS_TOP && !fs) return false;
@@ -176,6 +220,7 @@
       <header>
         <span class="title">WebRTC Analyzer</span>
         <span class="alarm" hidden></span>
+        ${CAN_PIP ? '<button data-act="pip" title="別ウィンドウに出す（動画を直接全画面にするプレーヤーでも見える）">⧉</button>' : ''}
         <button data-act="export"   title="エクスポート">⤓</button>
         <button data-act="options"  title="設定">⚙</button>
         <button data-act="collapse" title="折りたたみ">–</button>
@@ -210,11 +255,12 @@
     else if (act === 'close') chrome.storage.local.set({ enabled: false });
     else if (act === 'options') chrome.runtime.sendMessage({ __wraChannel: CHANNEL, type: 'open-options' });
     else if (act === 'export') menuEl.hidden = !menuEl.hidden;
+    else if (act === 'pip') togglePip();
     else if (act === 'csv') exportFile('csv');
     else if (act === 'json') exportFile('json');
     else if (act === 'clear') {
       history.clear();
-      note('履歴をクリアしました');
+      note('履歴をクリアしました（保存済みの履歴は設定画面から消せます）');
     }
   }
 
@@ -225,11 +271,45 @@
     note.t = setTimeout(() => (el.textContent = ''), 4000);
   }
 
+  /*
+   * Document Picture-in-Picture。<video> 要素そのものが全画面になると、
+   * video は子要素を描画しないためページ内のどこにも小窓を重ねられない。
+   * 常に最前面に出る別ウィンドウへ小窓ごと移しておけば、全画面の上にも見える。
+   * requestWindow() はユーザー操作起点でしか呼べないので、ボタンで開く。
+   */
+  async function togglePip() {
+    if (pipWin) {
+      pipWin.close();
+      return;
+    }
+    try {
+      const w = await documentPictureInPicture.requestWindow({ width: 320, height: 420 });
+      w.document.title = 'WebRTC Analyzer';
+      w.document.body.style.cssText = 'margin:0;background:#121418;';
+      // 閉じられたらページ内の表示に戻す
+      w.addEventListener('pagehide', () => {
+        pipWin = null;
+        hud.classList.remove('pip');
+        applyState();
+        render();
+      });
+      pipWin = w;
+      hud.classList.add('pip');
+      menuEl.hidden = true;
+      render();
+    } catch (_) {
+      note('別ウィンドウを開けませんでした');
+    }
+  }
+
   function applyState() {
     hud.classList.toggle('collapsed', collapsed);
     hud.classList.toggle('spark', !!cfg.sparkline);
     if (collapsed) menuEl.hidden = true;
-    if (pos) {
+    if (pipWin) {
+      // 別ウィンドウ内ではウィンドウ自体を動かすので、位置指定は使わない
+      hud.style.left = hud.style.top = hud.style.right = '';
+    } else if (pos) {
       hud.style.left = clamp(pos.left, 0, Math.max(0, innerWidth - 120)) + 'px';
       hud.style.top = clamp(pos.top, 0, Math.max(0, innerHeight - 28)) + 'px';
       hud.style.right = 'auto';
@@ -249,7 +329,7 @@
     let dy = 0;
 
     handle.addEventListener('pointerdown', (e) => {
-      if (e.target.tagName === 'BUTTON') return;
+      if (e.target.tagName === 'BUTTON' || pipWin) return;
       const r = hud.getBoundingClientRect();
       dx = e.clientX - r.left;
       dy = e.clientY - r.top;
@@ -287,7 +367,7 @@
     if (!hostEl) build();
 
     // フルスクリーン要素があればその配下へ移す（トップレイヤーに入れるため）
-    const parent = fullscreenEl() || document.documentElement;
+    const parent = pipWin ? pipWin.document.body : fullscreenEl() || document.documentElement;
     if (hostEl.parentNode !== parent) parent.appendChild(hostEl);
 
     const entries = live().sort(
@@ -361,6 +441,12 @@
             { key: 'loss', label: 'loss', value: pct(s.lossPct), level: lossLv, field: 'lossPct' },
             { key: 'buffer', label: 'buffer', value: ms(s.jbMs), level: bufferLv, field: 'jbMs' },
             { key: 'freeze', label: 'freeze', value: s.freezes != null ? String(s.freezes) : null, level: freezeLv, field: 'freezes' },
+            // 以下は直近1サンプルでの増分。loss 0% なのに固まる原因の切り分けに使う
+            { key: 'freezeDur', label: 'frz time', value: ms(s.freezeMs), level: s.freezeMs > 0 ? 'warn' : '', field: 'freezeMs' },
+            { key: 'nack', label: 'nack', value: count(s.nack), field: 'nack' },
+            { key: 'rtx', label: 'rtx', value: count(s.rtx), field: 'rtx' },
+            { key: 'pli', label: 'pli', value: count(s.pli), level: s.pli > 0 ? 'warn' : '', field: 'pli' },
+            { key: 'dropped', label: 'dropped', value: count(s.dropped), level: s.dropped > 0 ? 'warn' : '', field: 'dropped' },
           ]
         : [
             { key: 'bitrate', label: 'bitrate', value: bps(s.bps), field: 'bps' },
@@ -487,32 +573,6 @@
 
   // ------------------------------------------------------------- エクスポート
 
-  const COLS = [
-    ['time_local', (m, s) => localStamp(s.t)],
-    ['time_iso', (m, s) => new Date(s.t).toISOString()],
-    ['host', (m) => m.host],
-    ['pc', (m) => m.pcId],
-    ['direction', (m) => (m.dir === 'in' ? 'inbound' : 'outbound')],
-    ['kind', (m) => m.kind],
-    ['rid', (m) => m.rid],
-    ['codec', (m, s) => s.codec],
-    ['width', (m, s) => s.w],
-    ['height', (m, s) => s.h],
-    ['fps', (m, s) => round(s.fps, 1)],
-    ['bitrate_bps', (m, s) => round(s.bps, 0)],
-    ['target_bps', (m, s) => round(s.targetBps, 0)],
-    ['jitter_ms', (m, s) => round(s.jitterMs, 2)],
-    ['jitter_buffer_ms', (m, s) => round(s.jbMs, 1)],
-    ['loss_pct', (m, s) => round(s.lossPct, 3)],
-    ['freeze_count', (m, s) => s.freezes],
-    ['rtt_ms', (m, s) => round(s.rttMs, 2)],
-    ['quality_limitation', (m, s) => s.limit],
-    ['avail_out_bps', (m, s) => round(s.availOutBps, 0)],
-    ['avail_in_bps', (m, s) => round(s.availInBps, 0)],
-    ['route', (m, s) => s.route],
-    ['state', (m, s) => s.state],
-  ];
-
   function allRows() {
     const rows = [];
     for (const h of history.values()) for (const s of h.samples) rows.push({ meta: h.meta, s });
@@ -527,19 +587,7 @@
       return;
     }
 
-    let text;
-    let mime;
-    if (kind === 'csv') {
-      const lines = [COLS.map((c) => c[0]).join(',')];
-      for (const { meta, s } of rows) lines.push(COLS.map((c) => csvCell(c[1](meta, s))).join(','));
-      // BOM(U+FEFF) + CRLF。Excel で開いたときに文字化けせず、行も崩れない。
-      text = '\uFEFF' + lines.join('\r\n');
-      mime = 'text/csv;charset=utf-8';
-    } else {
-      const out = rows.map(({ meta, s }) => Object.fromEntries(COLS.map((c) => [c[0], c[1](meta, s) ?? null])));
-      text = JSON.stringify(out, null, 1);
-      mime = 'application/json';
-    }
+    const { text, mime } = WRA_EXPORT.build(kind, rows);
 
     /*
      * ページの DOM に <a href="blob:..."> を挿してクリックする方法は使わない。
@@ -552,53 +600,14 @@
       .sendMessage({
         __wraChannel: CHANNEL,
         type: 'download',
-        url: dataUrl(text, mime),
-        filename: `webrtc-${fileStamp()}.${kind}`,
+        url: WRA_EXPORT.dataUrl(text, mime),
+        filename: WRA_EXPORT.filename(kind),
       })
       .then((res) => {
         if (res && res.ok) note(`${rows.length} 行を書き出しました`);
         else note(`保存できませんでした: ${res?.error ?? '不明なエラー'}`);
       })
       .catch(() => note('保存できませんでした。拡張を再読み込みしてください'));
-  }
-
-  /** UTF-8 の文字列を data: URL にする。chrome.downloads は data: を受け付ける */
-  function dataUrl(text, mime) {
-    const bytes = new TextEncoder().encode(text);
-    let bin = '';
-    // 一度に渡すと引数が多すぎて RangeError になるので分割して詰める
-    for (let i = 0; i < bytes.length; i += 0x8000) {
-      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-    }
-    return `data:${mime};base64,${btoa(bin)}`;
-  }
-
-  function csvCell(v) {
-    if (v == null) return '';
-    const s = String(v);
-    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  }
-
-  function round(v, digits) {
-    return typeof v === 'number' && Number.isFinite(v) ? +v.toFixed(digits) : null;
-  }
-
-  function pad(n, w = 2) {
-    return String(n).padStart(w, '0');
-  }
-
-  /** Excel がそのまま日時として解釈できる形式 */
-  function localStamp(t) {
-    const d = new Date(t);
-    return (
-      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
-      `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`
-    );
-  }
-
-  function fileStamp() {
-    const d = new Date();
-    return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
   }
 
   // ------------------------------------------------------------- 整形
@@ -613,6 +622,10 @@
   function ms(v) {
     if (v == null) return null;
     return (v >= 100 ? Math.round(v) : v.toFixed(1)) + ' ms';
+  }
+
+  function count(v) {
+    return v == null ? null : String(v);
   }
 
   function pct(v) {

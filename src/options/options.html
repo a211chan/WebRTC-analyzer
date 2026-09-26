@@ -40,7 +40,21 @@
     <span class="ctl">
       <input type="number" id="historyMinutes" min="1" max="240" step="1"> <span class="unit">分</span>
     </span>
-    <span class="hint">CSV / JSON エクスポート用にメモリ上に保持する長さ。ページを離れると消える</span>
+    <span class="hint">小窓のエクスポートとスパークライン用にメモリ上に保持する長さ</span>
+  </label>
+
+  <label class="row">
+    <span class="label">履歴の保存</span>
+    <span class="ctl"><input type="checkbox" id="persist"> ページを離れても履歴を残す</span>
+    <span class="hint">10秒ごとに拡張のストレージへ書き出す。下の「保存済みの履歴」から書き出せる</span>
+  </label>
+
+  <label class="row">
+    <span class="label">保存期間</span>
+    <span class="ctl">
+      <input type="number" id="persistHours" min="1" max="720" step="1"> <span class="unit">時間</span>
+    </span>
+    <span class="hint">最後の記録からこれだけ経ったセッションは自動で消す（1時間あたり約2MB / 2ストリーム）</span>
   </label>
 
   <label class="row">
@@ -67,12 +81,28 @@
   </table>
 </section>
 
+<section>
+  <h2>保存済みの履歴</h2>
+  <p class="lead">ページ単位（リロードごとに別セッション）。IPアドレスやURLのパスは保存しない。</p>
+  <table id="sessions">
+    <thead>
+      <tr><th>開始</th><th>最終記録</th><th>ホスト</th><th>行数</th><th></th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+  <p class="actions">
+    <button id="refreshSessions">再読み込み</button>
+    <button id="clearSessions" class="danger">すべて削除</button>
+  </p>
+</section>
+
 <div class="footer">
   <button id="reset" class="danger">すべて既定値に戻す</button>
   <span id="status" class="status"></span>
 </div>
 
 <script src="../common/config.js"></script>
+<script src="../common/export.js"></script>
 <script src="options.js"></script>
 </body>
 </html>

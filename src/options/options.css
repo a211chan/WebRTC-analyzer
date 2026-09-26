@@ -91,3 +91,7 @@ button.danger:hover { background: #2c1f1e; }
 
 .status { color: var(--accent); font-size: 12px; opacity: 0; transition: opacity 0.15s; }
 .status.on { opacity: 1; }
+
+#sessions td.ops { white-space: nowrap; }
+#sessions td.ops button { padding: 2px 8px; margin-left: 4px; }
+.actions { margin-top: 10px; display: flex; gap: 8px; }
