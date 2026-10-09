@@ -11,6 +11,24 @@
 <p class="lead">変更は自動保存され、開いているタブに即座に反映されます。</p>
 
 <section>
+  <h2>起動</h2>
+
+  <div class="row">
+    <span class="label">小窓の表示</span>
+    <span class="ctl">
+      <button id="toggleEnabled"></button> <span id="enabledState" class="unit"></span>
+    </span>
+    <span class="hint">全タブ共通。ツールバーのアイコンをクリックしても切り替えられる</span>
+  </div>
+
+  <label class="row">
+    <span class="label">自動起動</span>
+    <span class="ctl"><input type="checkbox" id="autoStart"> ブラウザ起動時に自動で表示をONにする</span>
+    <span class="hint">OFF の場合、ブラウザを起動するたびに表示OFFから始まる</span>
+  </label>
+</section>
+
+<section>
   <h2>一般</h2>
 
   <label class="row">
