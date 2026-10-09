@@ -10,8 +10,10 @@
   if (globalThis.WRA_CONFIG) return;
 
   const DEFAULTS = {
-    /** 小窓の表示ON/OFF。ツールバーのアイコンが切り替える */
-    enabled: true,
+    /** 小窓の表示ON/OFF。ツールバーのアイコンと設定画面のボタンが切り替える */
+    enabled: false,
+    /** ブラウザ起動時・インストール時に自動で表示ONにするか。OFFなら起動のたびにOFFへ戻す */
+    autoStart: false,
     /** getStats() のポーリング間隔(ms)。patch.js へ postMessage で伝える */
     intervalMs: 1000,
     /** スパークライン（折れ線）を出すか */
