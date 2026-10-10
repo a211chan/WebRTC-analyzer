@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>WebRTC 受信品質レポート</title>
+<link rel="stylesheet" href="report.css">
+</head>
+<body>
+
+<div class="toolbar">
+  <button id="print" class="primary">PDFに保存（印刷）</button>
+  <span class="hint">印刷ダイアログの「送信先」で <b>PDFに保存</b> を選んでください。用紙は A4 縦を想定しています。</span>
+</div>
+
+<main id="report"><p class="loading">読み込み中…</p></main>
+
+<script src="../common/config.js"></script>
+<script src="../common/export.js"></script>
+<script src="report.js"></script>
+</body>
+</html>

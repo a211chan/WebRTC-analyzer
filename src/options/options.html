@@ -72,7 +72,7 @@
     <span class="ctl">
       <input type="number" id="persistHours" min="1" max="720" step="1"> <span class="unit">時間</span>
     </span>
-    <span class="hint">最後の記録からこれだけ経ったセッションは自動で消す（1時間あたり約2MB / 2ストリーム）</span>
+    <span class="hint">最後の記録からこれだけ経ったセッションは自動で消す（1時間あたり約3MB / 2ストリーム）</span>
   </label>
 
   <label class="row">
@@ -90,7 +90,8 @@
 
 <section>
   <h2>しきい値</h2>
-  <p class="lead">値がこれ以上になると色が変わる。空欄にするとその段階の判定を行わない。</p>
+  <p class="lead">値が条件を満たすと色が変わる。空欄にするとその段階の判定を行わない。品質レポートの判定にもこの値を使う。<br>
+    <span class="inv">↓</span> が付いた項目は<strong>低いほど悪い</strong>ので「以下」で判定する。</p>
   <table id="thresholds">
     <thead>
       <tr><th>項目</th><th>警告 (warn)</th><th>重大 (crit)</th><th class="desc">補足</th></tr>
@@ -100,15 +101,49 @@
 </section>
 
 <section>
+  <h2>受信品質レポート（PDF）</h2>
+  <p class="lead">保存済みの履歴から、受信した映像・音声の品質を評価する印刷用のレポートを開き、ブラウザの印刷で「PDFに保存」する。
+    送信したストリームは評価の対象外。判定には上の<strong>しきい値</strong>をそのまま使う。</p>
+
+  <label class="row">
+    <span class="label">題名</span>
+    <span class="ctl"><input type="text" id="reportTitle" maxlength="80"></span>
+    <span class="hint">表紙の見出し</span>
+  </label>
+
+  <label class="row">
+    <span class="label">作成者・宛先</span>
+    <span class="ctl"><input type="text" id="reportAuthor" maxlength="80" placeholder="例: 配信運用チーム"></span>
+    <span class="hint">空欄なら出さない</span>
+  </label>
+
+  <div class="row">
+    <span class="label">複数セッション</span>
+    <span class="ctl">
+      <label><input type="radio" name="reportMode" value="combined"> 1つにまとめる</label>
+      <label><input type="radio" name="reportMode" value="separate"> セッションごとに分ける</label>
+    </span>
+    <span class="hint">まとめると冒頭にセッションの比較表が付く。分けるとセッションごとに別タブで開く</span>
+  </div>
+
+  <h3>含める章</h3>
+  <div id="reportSections" class="fields"></div>
+
+  <h3>時系列グラフ</h3>
+  <div id="reportCharts" class="fields"></div>
+</section>
+
+<section>
   <h2>保存済みの履歴</h2>
   <p class="lead">ページ単位（リロードごとに別セッション）。IPアドレスやURLのパスは保存しない。</p>
   <table id="sessions">
     <thead>
-      <tr><th>開始</th><th>最終記録</th><th>ホスト</th><th>行数</th><th></th></tr>
+      <tr><th><input type="checkbox" id="pickAll" data-pick title="すべて選択"></th><th>開始</th><th>最終記録</th><th>ホスト</th><th>行数</th><th></th></tr>
     </thead>
     <tbody></tbody>
   </table>
   <p class="actions">
+    <button id="reportSelected">選択したセッションのレポート</button>
     <button id="refreshSessions">再読み込み</button>
     <button id="clearSessions" class="danger">すべて削除</button>
   </p>

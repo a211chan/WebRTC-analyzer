@@ -99,8 +99,16 @@
   }
 
   function filename(kind, t = Date.now()) {
+    return `webrtc-${fileStamp(t)}.${kind}`;
+  }
+
+  /** ファイル名に使う日時（ローカル時刻）。YYYYMMDD-HHMMSS */
+  function fileStamp(t = Date.now()) {
     const d = new Date(t);
-    return `webrtc-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.${kind}`;
+    return (
+      `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-` +
+      `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+    );
   }
 
   // ------------------------------------------------------------ 永続化
@@ -200,6 +208,7 @@
     build,
     dataUrl,
     filename,
+    fileStamp,
     localStamp,
     newSessionId,
     writeChunk,

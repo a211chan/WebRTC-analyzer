@@ -528,7 +528,10 @@
     const lossLv = level('lossPct', s.lossPct);
     const rttLv = level('rttMs', s.rttMs);
     const freezeLv = level('freeze', freezeDelta(samples));
-    const crit = [jitterLv, bufferLv, lossLv, rttLv, freezeLv].filter((l) => l === 'crit').length;
+    // fps は受信映像だけ判定する。送信側の fps は送り手の設定次第で、低くても劣化とは限らない
+    const fpsLv = s.dir === 'in' && s.kind === 'video' ? level('fps', s.fps) : '';
+    const concealLv = level('concealPct', s.concealPct);
+    const crit = [jitterLv, bufferLv, lossLv, rttLv, freezeLv, fpsLv, concealLv].filter((l) => l === 'crit').length;
 
     const items =
       s.dir === 'in'
@@ -538,6 +541,7 @@
             { key: 'loss', label: 'loss', value: pct(s.lossPct), level: lossLv, field: 'lossPct' },
             { key: 'buffer', label: 'buffer', value: ms(s.jbMs), level: bufferLv, field: 'jbMs' },
             { key: 'freeze', label: 'freeze', value: s.freezes != null ? String(s.freezes) : null, level: freezeLv, field: 'freezes' },
+            { key: 'conceal', label: 'conceal', value: pct(s.concealPct), level: concealLv, field: 'concealPct' },
             // 以下は直近1サンプルでの増分。loss 0% なのに固まる原因の切り分けに使う
             { key: 'freezeDur', label: 'frz time', value: ms(s.freezeMs), level: s.freezeMs > 0 ? 'warn' : '', field: 'freezeMs' },
             { key: 'nack', label: 'nack', value: count(s.nack), field: 'nack' },
@@ -559,22 +563,25 @@
     return {
       crit,
       html: `<div class="stream">
-        ${streamHead(s.dir === 'in' ? '↓' : '↑', s.dir, s)}
+        ${streamHead(s.dir === 'in' ? '↓' : '↑', s.dir, s, fpsLv)}
         ${metrics(s, items, samples)}
       </div>`,
     };
   }
 
-  function streamHead(arrow, dir, s) {
-    const res = cfg.fields.resolution && s.w && s.h ? `${s.w}×${s.h}` : null;
-    const f = cfg.fields.fps && s.fps != null ? `${s.fps < 10 ? s.fps.toFixed(1) : Math.round(s.fps)}fps` : null;
+  function streamHead(arrow, dir, s, fpsLv) {
+    const res = cfg.fields.resolution && s.w && s.h ? esc(`${s.w}×${s.h}`) : null;
+    const f =
+      cfg.fields.fps && s.fps != null
+        ? `<span class="v ${fpsLv || ''}">${esc(`${s.fps < 10 ? s.fps.toFixed(1) : Math.round(s.fps)}fps`)}</span>`
+        : null;
     // 音声には解像度もFPSも無い。ビットレートは下の一覧に出るので見出しは空でよい。
     const main = [res, f].filter(Boolean).join(' ');
     const kind = s.rid ? `${s.kind}·${s.rid}` : s.kind;
     return `<div class="stream-head">
       <span class="arrow ${dir}">${arrow}</span>
       <span class="kind">${esc(kind)}</span>
-      <span class="head-main">${esc(main)}</span>
+      <span class="head-main">${main}</span>
       <span class="codec">${cfg.fields.codec ? esc(codec(s.codec)) : ''}</span>
     </div>`;
   }
@@ -663,8 +670,10 @@
     if (!cfg.alerts || v == null) return '';
     const t = cfg.thresholds[metric];
     if (!t) return '';
-    if (t.crit != null && v >= t.crit) return 'crit';
-    if (t.warn != null && v >= t.warn) return 'warn';
+    // fps のように「低いほど悪い」指標は dir: 'below'
+    const hit = (lim) => lim != null && (t.dir === 'below' ? v <= lim : v >= lim);
+    if (hit(t.crit)) return 'crit';
+    if (hit(t.warn)) return 'warn';
     return '';
   }
 

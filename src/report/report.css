@@ -1,0 +1,163 @@
+/*
+ * 品質レポート。紙（A4縦）に出すことを前提に、明るい配色だけを持つ。
+ * 色は判定（良好・注意・不良）と系列の区別にだけ使う。
+ */
+:root {
+  color-scheme: light;
+  --fg: #1d2330;
+  --dim: #5f6875;
+  --line: #d7dce3;
+  --soft: #f4f6f9;
+  --ok: #1f7a4d;
+  --ok-bg: #e5f4ec;
+  --warn: #9a5b00;
+  --warn-bg: #fff2d9;
+  --crit: #b3261e;
+  --crit-bg: #fde7e5;
+  --s1: #2457c5;
+  --s2: #c2410c;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+body {
+  margin: 0;
+  background: #e9ecf1;
+  color: var(--fg);
+  font: 10.5pt/1.65 "Hiragino Sans", "Noto Sans JP", "Yu Gothic", -apple-system, sans-serif;
+}
+
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  background: #1d2330;
+  color: #e8eaed;
+  font-size: 12px;
+}
+.toolbar .hint { color: #aab2bd; }
+.toolbar button {
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: #7fb2ff;
+  color: #0e1116;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+main {
+  width: 210mm;
+  max-width: 100%;
+  margin: 16px auto 40px;
+  padding: 14mm 14mm 10mm;
+  background: #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
+}
+.loading { color: var(--dim); }
+
+h1 { font-size: 18pt; margin: 0 0 8px; letter-spacing: 0.02em; }
+h2 {
+  font-size: 11.5pt;
+  margin: 0 0 8px;
+  padding-bottom: 3px;
+  border-bottom: 2px solid var(--fg);
+}
+h2.ptitle { font-size: 12.5pt; border: 0; background: var(--soft); padding: 6px 10px; margin-bottom: 12px; }
+
+section { margin: 0 0 16px; break-inside: avoid; }
+section.charts, section.criteria { break-inside: auto; }
+.paged { break-before: page; }
+
+.cover { display: grid; grid-template-columns: 1fr auto; gap: 6px 20px; align-items: start; margin-bottom: 18px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.cover h1 { grid-column: 1 / -1; }
+.meta { margin: 0; display: grid; gap: 1px; font-size: 9.5pt; }
+.meta div, .kv2 div { display: flex; gap: 10px; }
+.meta dt, .kv2 dt { color: var(--dim); min-width: 6em; }
+.meta dd, .kv2 dd { margin: 0; }
+
+.verdict { display: inline-flex; flex-direction: column; align-items: center; padding: 6px 18px; border-radius: 8px; border: 2px solid; min-width: 90px; }
+.verdict .vl { font-size: 8.5pt; }
+.verdict .vv { font-size: 18pt; font-weight: 700; line-height: 1.2; }
+.summary .verdict { float: right; margin: 0 0 6px 12px; }
+
+.ok { color: var(--ok); }
+.warn { color: var(--warn); }
+.crit { color: var(--crit); }
+.verdict.ok { background: var(--ok-bg); }
+.verdict.warn { background: var(--warn-bg); }
+.verdict.crit { background: var(--crit-bg); }
+
+.tag { display: inline-block; font-size: 8pt; font-weight: 600; padding: 0 6px; border-radius: 3px; background: var(--soft); color: var(--dim); white-space: nowrap; }
+.tag.ok { background: var(--ok-bg); color: var(--ok); }
+.tag.warn { background: var(--warn-bg); color: var(--warn); }
+.tag.crit { background: var(--crit-bg); color: var(--crit); }
+
+.lead { margin: 0 0 8px; font-size: 11pt; }
+.findings { list-style: none; margin: 0; padding: 0; clear: both; }
+.findings li { color: var(--fg); padding: 5px 0 5px 10px; border-left: 3px solid; margin-bottom: 4px; }
+.findings li.warn { border-color: var(--warn); }
+.findings li.crit { border-color: var(--crit); }
+.findings .tag { margin-right: 6px; }
+.note { color: var(--dim); font-size: 9.5pt; margin: 6px 0 0; }
+
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.kpi { border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; color: var(--fg); }
+.kpi.warn { border-color: var(--warn); background: var(--warn-bg); }
+.kpi.crit { border-color: var(--crit); background: var(--crit-bg); }
+.kl { font-size: 8.5pt; color: var(--dim); }
+.kv { font-size: 14pt; font-weight: 700; line-height: 1.3; font-variant-numeric: tabular-nums; }
+.ks { font-size: 8pt; color: var(--dim); min-height: 1.4em; }
+
+table.grid { width: 100%; border-collapse: collapse; font-size: 9pt; }
+.grid th, .grid td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.grid thead th { background: var(--soft); color: var(--dim); font-weight: 600; font-size: 8.5pt; }
+.grid tr { break-inside: avoid; }
+.dim { color: var(--dim); font-size: 9pt; }
+.mono { font-family: ui-monospace, Menlo, monospace; font-size: 8pt; }
+
+.kv2 { margin: 0 0 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 1px 16px; font-size: 9.5pt; }
+
+.bar { display: inline-block; width: 60px; height: 7px; background: var(--soft); border-radius: 2px; vertical-align: middle; overflow: hidden; }
+.bar span { display: block; height: 100%; background: var(--s1); }
+
+.legend { font-size: 8.5pt; color: var(--dim); margin: 0 0 4px; }
+.lg { display: inline-block; width: 14px; height: 0; border-top: 2px dashed; vertical-align: middle; margin: 0 3px 0 10px; }
+.lg:first-child { margin-left: 0; }
+.lg.warn { border-color: var(--warn); }
+.lg.crit { border-color: var(--crit); }
+.lg.band { height: 9px; border: 0; background: var(--crit-bg); }
+.lg.err { width: 0; height: 10px; border: 0; border-left: 2px solid var(--crit); }
+
+.chart { margin: 0 0 8px; break-inside: avoid; }
+.chart figcaption { font-size: 9pt; font-weight: 600; }
+.key { display: inline-block; width: 14px; height: 0; border-top: 2px solid; vertical-align: middle; margin: 0 3px 0 10px; }
+.key.s1 { border-color: var(--s1); }
+.key.s2 { border-color: var(--s2); }
+.plot { width: 100%; height: auto; display: block; }
+.plot .gl { stroke: var(--line); stroke-width: 0.6; }
+.plot .axl { stroke: var(--dim); stroke-width: 0.8; }
+.plot .ax { font-size: 9px; fill: var(--dim); }
+.plot .ln { fill: none; stroke-width: 1.3; stroke-linejoin: round; }
+.plot .ln.s1 { stroke: var(--s1); }
+.plot .ln.s2 { stroke: var(--s2); stroke-width: 1; }
+.plot .th { stroke-width: 1; stroke-dasharray: 4 3; }
+.plot .th.warn { stroke: var(--warn); }
+.plot .th.crit { stroke: var(--crit); }
+.plot .band { fill: var(--crit-bg); }
+.plot .err { stroke: var(--crit); stroke-width: 1.2; }
+
+.foot { margin-top: 18px; padding-top: 6px; border-top: 1px solid var(--line); font-size: 8pt; color: var(--dim); }
+
+@page { size: A4 portrait; margin: 12mm; }
+@media print {
+  body { background: #fff; }
+  .toolbar { display: none; }
+  main { width: auto; margin: 0; padding: 0; box-shadow: none; }
+}
