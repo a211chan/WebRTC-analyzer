@@ -42,6 +42,7 @@
     ['freeze', 'freeze', '回', '直近1サンプルでのフリーズ増分（累積値ではない）。レポートでは期間中の合計回数と比べる'],
     ['fps', 'fps', 'fps', '受信映像のフレームレート。配信側が 15fps などの場合は、それに合わせて下げるか空欄にする'],
     ['concealPct', 'conceal', '%', '受信音声のうち、欠けて推測で埋めたサンプルの割合。音声の途切れ・ノイズの目安'],
+    ['limitPct', '品質制限', '%', '送信レポート用。期間中に CPU・帯域による品質制限がかかっていた時間の割合（小窓では使わない）'],
   ];
 
   /** レポートの章。DEFAULTS.report.sections のキーと対応する */
@@ -50,8 +51,8 @@
     kpi: '主要指標（数値カード）',
     judgement: 'しきい値判定の表',
     charts: '時系列グラフ',
-    events: 'イベント一覧（フリーズ・再接続・解像度の変化など）',
-    stream: '受信ストリーム（コーデック・解像度・経路・再送）',
+    events: 'イベント一覧（フリーズ・品質制限・再接続・解像度の変化など）',
+    stream: 'ストリームの概要（コーデック・解像度・経路・再送）',
     conditions: '計測条件（ブラウザ・間隔・非表示時間など）',
     criteria: '判定基準（しきい値の一覧）',
   };
@@ -62,6 +63,12 @@
     loss: 'パケットロス率',
     rtt: '往復遅延（RTT）',
     conceal: '音声の補間率',
+  };
+  const REPORT_SEND_CHARTS = {
+    bitrate: '送信ビットレートと推定上り帯域',
+    fps: '送信とカメラのフレームレート',
+    loss: 'パケットロス率（受け手の報告）',
+    rtt: '往復遅延（RTT）',
   };
 
   const $ = (id) => document.getElementById(id);
@@ -102,6 +109,7 @@
         .join('');
     $('reportSections').innerHTML = box('data-rsec', REPORT_SECTIONS);
     $('reportCharts').innerHTML = box('data-rchart', REPORT_CHARTS);
+    $('reportSendCharts').innerHTML = box('data-rschart', REPORT_SEND_CHARTS);
   }
 
   // ------------------------------------------------------------ 反映
@@ -127,12 +135,14 @@
     }
 
     $('reportTitle').value = cfg.report.title;
+    $('reportSendTitle').value = cfg.report.sendTitle;
     $('reportAuthor').value = cfg.report.author;
     for (const el of document.querySelectorAll('input[name="reportMode"]')) el.checked = el.value === cfg.report.mode;
     for (const el of document.querySelectorAll('[data-rsec]')) el.checked = cfg.report.sections[el.dataset.rsec] !== false;
     for (const el of document.querySelectorAll('[data-rchart]')) el.checked = cfg.report.charts[el.dataset.rchart] !== false;
+    for (const el of document.querySelectorAll('[data-rschart]')) el.checked = cfg.report.sendCharts[el.dataset.rschart] !== false;
     // グラフの章を外したら、グラフの種類は選んでも意味がない
-    for (const el of document.querySelectorAll('[data-rchart]')) el.disabled = !cfg.report.sections.charts;
+    for (const el of document.querySelectorAll('[data-rchart], [data-rschart]')) el.disabled = !cfg.report.sections.charts;
 
     // スパークラインOFFなら範囲指定は意味がない
     $('sparkSeconds').disabled = !cfg.sparkline;
@@ -162,10 +172,12 @@
       next.thresholds[el.dataset.th][el.dataset.lv] = Number.isFinite(v) ? v : null;
     }
     next.report.title = $('reportTitle').value.trim() || DEFAULTS.report.title;
+    next.report.sendTitle = $('reportSendTitle').value.trim() || DEFAULTS.report.sendTitle;
     next.report.author = $('reportAuthor').value.trim();
     next.report.mode = document.querySelector('input[name="reportMode"]:checked')?.value || DEFAULTS.report.mode;
     for (const el of document.querySelectorAll('[data-rsec]')) next.report.sections[el.dataset.rsec] = el.checked;
     for (const el of document.querySelectorAll('[data-rchart]')) next.report.charts[el.dataset.rchart] = el.checked;
+    for (const el of document.querySelectorAll('[data-rschart]')) next.report.sendCharts[el.dataset.rschart] = el.checked;
     return next;
   }
 
@@ -213,12 +225,13 @@
         (s, i) => `
       <tr>
         <td><input type="checkbox" data-pick="${i}"></td>
-        <td>${escapeHtml(localStamp(s.start).slice(0, 19))}</td>
-        <td>${escapeHtml(localStamp(s.end).slice(0, 19))}</td>
+        <td title="${escapeHtml(localStamp(s.start).slice(0, 19))}">${escapeHtml(localStamp(s.start).slice(5, 19))}</td>
+        <td title="${escapeHtml(localStamp(s.end).slice(0, 19))}">${escapeHtml(localStamp(s.end).slice(5, 19))}</td>
         <td class="name">${escapeHtml(s.host)}</td>
         <td>${s.rows}</td>
         <td class="ops">
-          <button data-sess="${i}" data-op="report">レポート</button>
+          <button data-sess="${i}" data-op="report-in" ${has(s, 'in') ? '' : 'disabled'} title="受信品質レポート">受信</button>
+          <button data-sess="${i}" data-op="report-out" ${has(s, 'out') ? '' : 'disabled'} title="送信品質レポート">送信</button>
           <button data-sess="${i}" data-op="csv">CSV</button>
           <button data-sess="${i}" data-op="json">JSON</button>
           <button data-sess="${i}" data-op="del" class="danger">削除</button>
@@ -234,8 +247,8 @@
     const s = sessions[Number(btn.dataset.sess)];
     if (!s) return;
     const op = btn.dataset.op;
-    if (op === 'report') {
-      openReports([s]);
+    if (op === 'report-in' || op === 'report-out') {
+      openReports([s], op.slice(7));
       return;
     }
     if (op === 'del') {
@@ -260,16 +273,28 @@
    * セッションIDだけを URL で渡し、中身は向こうで storage から読み直す。
    * 「分ける」ときはセッションごとにタブを開き、それぞれで印刷→PDF保存してもらう。
    */
-  function openReports(list) {
+  function openReports(list, dir) {
     if (!list.length) {
       flash('セッションを選んでください');
       return;
     }
-    const groups = cfg.report.mode === 'separate' ? list.map((s) => [s]) : [list];
+    // その向きのストリームを含まないセッションは外す（記録の無い頁を作らない）
+    const usable = list.filter((s) => has(s, dir));
+    if (!usable.length) {
+      flash(dir === 'out' ? '送信の記録があるセッションがありません' : '受信の記録があるセッションがありません');
+      return;
+    }
+    const groups = cfg.report.mode === 'separate' ? usable.map((s) => [s]) : [usable];
     for (const g of groups) {
-      const url = chrome.runtime.getURL('src/report/report.html') + '?s=' + g.map((s) => encodeURIComponent(s.id)).join(',');
+      const url =
+        chrome.runtime.getURL('src/report/report.html') + `?dir=${dir}&s=` + g.map((s) => encodeURIComponent(s.id)).join(',');
       chrome.tabs.create({ url });
     }
+  }
+
+  /** セッションがその向き（in / out）のストリームを含むか。0.6.0 より前の記録は分からないので含むとみなす */
+  function has(s, dir) {
+    return !s.dirs || s.dirs[dir] === true;
   }
 
   function picked() {
@@ -307,7 +332,8 @@
     await paintSessions();
     document.querySelector('#sessions').addEventListener('click', onSession);
     $('refreshSessions').addEventListener('click', paintSessions);
-    $('reportSelected').addEventListener('click', () => openReports(picked()));
+    $('reportSelected').addEventListener('click', () => openReports(picked(), 'in'));
+    $('reportSelectedSend').addEventListener('click', () => openReports(picked(), 'out'));
     $('pickAll').addEventListener('change', (e) => {
       for (const el of document.querySelectorAll('#sessions tbody [data-pick]')) el.checked = e.target.checked;
     });

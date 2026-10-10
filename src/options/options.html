@@ -101,14 +101,21 @@
 </section>
 
 <section>
-  <h2>受信品質レポート（PDF）</h2>
-  <p class="lead">保存済みの履歴から、受信した映像・音声の品質を評価する印刷用のレポートを開き、ブラウザの印刷で「PDFに保存」する。
-    送信したストリームは評価の対象外。判定には上の<strong>しきい値</strong>をそのまま使う。</p>
+  <h2>品質レポート（PDF）</h2>
+  <p class="lead">保存済みの履歴から印刷用のレポートを開き、ブラウザの印刷で「PDFに保存」する。
+    <strong>受信</strong>（受け取った映像・音声の品質）と<strong>送信</strong>（送り出した映像・音声の品質）は別々のレポートになる。
+    判定には上の<strong>しきい値</strong>をそのまま使う。</p>
 
   <label class="row">
-    <span class="label">題名</span>
+    <span class="label">題名（受信）</span>
     <span class="ctl"><input type="text" id="reportTitle" maxlength="80"></span>
-    <span class="hint">表紙の見出し</span>
+    <span class="hint">受信品質レポートの表紙の見出し</span>
+  </label>
+
+  <label class="row">
+    <span class="label">題名（送信）</span>
+    <span class="ctl"><input type="text" id="reportSendTitle" maxlength="80"></span>
+    <span class="hint">送信品質レポートの表紙の見出し</span>
   </label>
 
   <label class="row">
@@ -129,8 +136,11 @@
   <h3>含める章</h3>
   <div id="reportSections" class="fields"></div>
 
-  <h3>時系列グラフ</h3>
+  <h3>時系列グラフ（受信）</h3>
   <div id="reportCharts" class="fields"></div>
+
+  <h3>時系列グラフ（送信）</h3>
+  <div id="reportSendCharts" class="fields"></div>
 </section>
 
 <section>
@@ -143,7 +153,8 @@
     <tbody></tbody>
   </table>
   <p class="actions">
-    <button id="reportSelected">選択したセッションのレポート</button>
+    <button id="reportSelected" title="チェックを入れたセッションの受信品質レポート">受信レポート（選択分）</button>
+    <button id="reportSelectedSend" title="チェックを入れたセッションの送信品質レポート">送信レポート（選択分）</button>
     <button id="refreshSessions">再読み込み</button>
     <button id="clearSessions" class="danger">すべて削除</button>
   </p>

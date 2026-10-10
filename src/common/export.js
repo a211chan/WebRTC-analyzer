@@ -6,7 +6,7 @@
  *   - chrome.storage.local に書き出した履歴の読み書き
  *
  * 保存形式（キーはすべて "wra:" で始まる。設定のキーとは衝突しない）
- *   wra:s:<sid>      セッションの概要 { id, host, start, end, rows, chunks, browser, version, intervalMs }
+ *   wra:s:<sid>      セッションの概要 { id, host, start, end, rows, chunks, browser, version, intervalMs, dirs }
  *   wra:c:<sid>:<n>  n 番目の書き出し分 { metas: {k: meta}, rows: [[k, sample], ...] }
  *
  * 書き出しのたびに概要と新しいチャンクを足すだけで、既存のキーは読み直さない。

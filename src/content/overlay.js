@@ -177,6 +177,9 @@
       WRA_EXPORT.prune(cfg.persistHours).catch(() => {});
     }
     const { metas, rows } = persist;
+    // 設定画面が「受信 / 送信レポート」のボタンを出し分けるために、含む向きを概要に持たせる
+    persist.session.dirs ||= {};
+    for (const m of Object.values(metas)) persist.session.dirs[m.dir] = true;
     persist.metas = {};
     persist.rows = [];
     WRA_EXPORT.writeChunk(persist.session, metas, rows).catch(() => {

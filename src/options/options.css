@@ -86,6 +86,7 @@ button {
   cursor: pointer;
 }
 button:hover { background: #262e39; }
+button:disabled { opacity: 0.35; cursor: default; }
 button.danger { color: #ff9c8a; border-color: #4a2f2c; }
 button.danger:hover { background: #2c1f1e; }
 
@@ -95,8 +96,10 @@ button.danger:hover { background: #2c1f1e; }
 td:nth-child(2), td:nth-child(3) { white-space: nowrap; }
 #sessions th:first-child, #sessions td:first-child { width: 22px; }
 #sessions td.ops { white-space: nowrap; }
-#sessions td.ops button { padding: 2px 8px; margin-left: 4px; }
-.actions { margin-top: 10px; display: flex; gap: 8px; }
+#sessions td.ops button { padding: 2px 7px; margin-left: 3px; }
+.actions { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; }
+.actions button { white-space: nowrap; }
+#sessions th:nth-child(5), #sessions td:nth-child(5) { white-space: nowrap; }
 
 .dir { color: #6b737e; font-size: 11px; margin-left: 2px; white-space: nowrap; }
 .inv { color: #ffb37f; margin-left: 4px; font-weight: 700; }

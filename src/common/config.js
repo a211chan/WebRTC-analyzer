@@ -78,6 +78,11 @@
       fps: { dir: 'below', warn: 20, crit: 10 },
       /** 受信音声の補間率(%)。欠けた音声を推測で埋めたサンプルの割合 */
       concealPct: { dir: 'above', warn: 1, crit: 5 },
+      /*
+       * 送信映像に CPU・帯域による品質制限がかかっていた時間の割合(%)。
+       * 期間全体で1つの値なので送信レポートだけが使う（小窓は limit の理由を色で出す）。
+       */
+      limitPct: { dir: 'above', warn: 10, crit: 30 },
     },
 
     /*
@@ -85,8 +90,9 @@
      * 判定は上の thresholds をそのまま使う。レポート専用のしきい値は持たない。
      */
     report: {
-      /** 表紙に出す題名 */
+      /** 表紙に出す題名（受信 / 送信） */
       title: 'WebRTC 受信品質レポート',
+      sendTitle: 'WebRTC 送信品質レポート',
       /** 作成者・提出先など。空なら出さない */
       author: '',
       /** 複数セッションを選んだとき: 'combined' = 1冊にまとめる / 'separate' = セッションごとに別タブ */
@@ -102,7 +108,7 @@
         conditions: true,
         criteria: true,
       },
-      /** 時系列グラフの種類 */
+      /** 時系列グラフの種類（受信レポート） */
       charts: {
         bitrate: true,
         fps: true,
@@ -110,6 +116,13 @@
         loss: true,
         rtt: true,
         conceal: true,
+      },
+      /** 時系列グラフの種類（送信レポート） */
+      sendCharts: {
+        bitrate: true,
+        fps: true,
+        loss: true,
+        rtt: true,
       },
     },
   };
@@ -141,9 +154,10 @@
     const r = stored.report;
     if (r && typeof r === 'object') {
       if (typeof r.title === 'string') out.report.title = r.title;
+      if (typeof r.sendTitle === 'string') out.report.sendTitle = r.sendTitle;
       if (typeof r.author === 'string') out.report.author = r.author;
       if (r.mode === 'combined' || r.mode === 'separate') out.report.mode = r.mode;
-      for (const g of ['sections', 'charts']) {
+      for (const g of ['sections', 'charts', 'sendCharts']) {
         if (!r[g]) continue;
         for (const [k, v] of Object.entries(r[g])) {
           if (k in out.report[g]) out.report[g][k] = v === true;
