@@ -62,7 +62,7 @@ CSV は **BOM 付き UTF-8 + CRLF**、日時は `time_local` 列に `YYYY-MM-DD 
 
 - 設定画面の「保存済みの履歴」に、ページ単位（リロードごとに別セッション）で一覧が出る。そこから CSV / JSON で書き出す・削除する
 - 最後の記録から24時間（設定で変更可）経ったセッションは自動で消える
-- 目安は 1時間あたり約2MB（映像＋音声の2ストリーム、1秒間隔）。`unlimitedStorage` 権限で容量上限を外してある
+- 目安は 1時間あたり約3MB（映像＋音声の2ストリーム、1秒間隔）。`unlimitedStorage` 権限で容量上限を外してある
 - 設定の「ページを離れても履歴を残す」を OFF にすれば書き出しは行わない
 
 ### しきい値
@@ -113,6 +113,31 @@ CSV は **BOM 付き UTF-8 + CRLF**、日時は `time_local` 列に `YYYY-MM-DD 
 | どれも増えずに freeze | 供給側（エンコーダ / CDN）がデータを出していない |
 | `pli` | キーフレーム待ちで固まっている |
 | `dropped` | 届いてはいるが表示が間に合っていない。デコード / 描画側 |
+
+### エクスポートだけに入る値
+
+小窓には出さず、CSV / JSON と保存済みの履歴にだけ入る値。品質レポートの集計用で、列は既存の列の後ろに並ぶ。
+
+| 列 | 向き | 取得元 / 意味 |
+|---|---|---|
+| `visible` | 共通 | タブが表示されていたか（1/0）。非表示中はブラウザが描画を間引くので、受信の fps・dropped は当てにならない |
+| `ssrc` / `mid` | 共通 | ストリームの識別子。値が変われば再接続やストリームの張り替え |
+| `candidate_pair_changes` | 共通 | `transport.selectedCandidatePairChanges`（累積）。relay どうしの切り替えも数える |
+| `packets_received` / `packets_lost` | 受信 | パケット数の増分。期間全体の損失率を出すための分母・分子 |
+| `packets_discarded` | 受信 | 遅れて届きジッターバッファで捨てたパケット（増分） |
+| `fir_count` / `key_frames` | 共通 | キーフレーム要求（FIR）とキーフレーム数の増分 |
+| `pause_count` / `pause_duration_ms` | 受信 | `pauseCount`（累積）/ `totalPausesDuration` の増分。5秒以上フレームが来なかった途切れ |
+| `decode_ms_per_frame` | 受信 | `totalDecodeTime ÷ framesDecoded` の差分比。端末側の処理不足の切り分け |
+| `concealed_pct` / `concealment_events` | 受信（音声） | `concealedSamples ÷ totalSamplesReceived` の差分比と、補間の発生回数。音声版の freeze |
+| `source_width` / `source_height` / `source_fps` | 送信 | `media-source` の値。送信解像度・fps との差がダウンスケール / フレーム間引き |
+| `audio_level` | 送信（音声） | マイクの入力レベル（0〜1）。0 が続けばミュートか無音 |
+| `encode_ms_per_frame` | 送信 | `totalEncodeTime ÷ framesEncoded` の差分比 |
+| `limit_cpu_ms` / `limit_bandwidth_ms` | 送信 | `qualityLimitationDurations` の増分。直近1サンプルで制限がかかっていた時間 |
+| `resolution_changes` | 送信 | `qualityLimitationResolutionChanges` の増分 |
+
+`nack_count` / `pli_count` / `fir_count` / `retransmitted_packets` は、受信の行では「自分が出した要求と再送で受け取った数」、送信の行では「相手から届いた要求と再送した数」になる。
+
+保存済みのセッションには、ブラウザ名とバージョン・OS・拡張のバージョン・計測間隔も記録する（レポートの計測条件用）。
 
 Δt はポーリングの揺らぎを避けるため、レポート自身の `timestamp` から求めている。再接続や SSRC 変更でカウンタがリセットされて差分が負になったサンプルは破棄する。
 

@@ -165,6 +165,7 @@
       rttMs: conn.rttMs,
       availOutBps: conn.availOutBps,
       availInBps: conn.availInBps,
+      pairChanges: conn.pairChanges,
       inbound: inbound.sort(byKind),
       outbound: outbound.sort(byKind),
     };
@@ -198,7 +199,9 @@
         }
       }
     }
-    if (!pair) return { route: null, protocol: null, rttMs: null, availOutBps: null, availInBps: null };
+    // 経路の切り替わり回数（累積）。relay どうしの切り替えは route の文字列では見えない
+    const pairChanges = transport && num(transport.selectedCandidatePairChanges) ? transport.selectedCandidatePairChanges : null;
+    if (!pair) return { route: null, protocol: null, rttMs: null, availOutBps: null, availInBps: null, pairChanges };
 
     const local = byId.get(pair.localCandidateId);
     const remote = byId.get(pair.remoteCandidateId);
@@ -211,6 +214,7 @@
       rttMs: num(pair.currentRoundTripTime) ? pair.currentRoundTripTime * 1000 : null,
       availOutBps: num(pair.availableOutgoingBitrate) ? pair.availableOutgoingBitrate : null,
       availInBps: num(pair.availableIncomingBitrate) ? pair.availableIncomingBitrate : null,
+      pairChanges,
     };
   }
 
@@ -222,10 +226,17 @@
     const dJbDelay = d('jitterBufferDelay');
     const dJbCount = d('jitterBufferEmittedCount');
     const dFreezeSec = d('totalFreezesDuration');
+    const dPauseSec = d('totalPausesDuration');
+    const dDecoded = d('framesDecoded');
+    const dDecodeSec = d('totalDecodeTime');
+    const dConcealed = d('concealedSamples');
+    const dSamples = d('totalSamplesReceived');
 
     return {
       dir: 'in',
       kind: s.kind || s.mediaType || '?',
+      ssrc: num(s.ssrc) ? s.ssrc : null,
+      mid: s.mid ?? null,
       w: num(s.frameWidth) ? s.frameWidth : null,
       h: num(s.frameHeight) ? s.frameHeight : null,
       fps: fpsOf(s, d, 'framesDecoded'),
@@ -245,6 +256,26 @@
       rtx: d('retransmittedPacketsReceived'),
       dropped: d('framesDropped'),
       freezeMs: dFreezeSec !== null ? dFreezeSec * 1000 : null,
+      fir: d('firCount'),
+      keyFrames: d('keyFramesDecoded'),
+      discarded: d('packetsDiscarded'),
+      // pause は「5秒以上フレームが来なかった」。freeze より長い途切れ（送信停止・映像OFF）
+      pauses: num(s.pauseCount) ? s.pauseCount : null,
+      pauseMs: dPauseSec !== null ? dPauseSec * 1000 : null,
+      // 1フレームあたりのデコード時間。端末の処理能力不足の切り分け用
+      decodeMs: dDecodeSec !== null && dDecoded ? (dDecodeSec / dDecoded) * 1000 : null,
+      /*
+       * パケット数の増分そのもの。lossPct は1サンプル内の比率なので、期間全体の
+       * 損失率をレポートで正しく出すには分子・分母を別に持っておく必要がある。
+       */
+      pktRecv: dRecv,
+      pktLost: dLost,
+      /*
+       * 音声の補間率。欠けた音声を推測で埋めたサンプルの割合で、映像の freeze に
+       * 相当する「聞こえ方の劣化」。loss が 0 でも遅延到着で補間されることがある。
+       */
+      concealPct: dConcealed !== null && dSamples ? (dConcealed / dSamples) * 100 : null,
+      concealEvents: d('concealmentEvents'),
       codec: byId.get(s.codecId)?.mimeType ?? null,
     };
   }
@@ -255,21 +286,40 @@
 
     // 送信側の RTT / ジッター / ロスは相手からの RTCP レポート（remote-inbound-rtp）に載る
     const remote = s.remoteId ? byId.get(s.remoteId) : null;
+    const dEncoded = d('framesEncoded');
+    const dEncodeSec = d('totalEncodeTime');
 
     return {
       dir: 'out',
       kind: s.kind || s.mediaType || '?',
+      ssrc: num(s.ssrc) ? s.ssrc : null,
+      mid: s.mid ?? null,
       rid: s.rid ?? null,
       w: num(s.frameWidth) ? s.frameWidth : null,
       h: num(s.frameHeight) ? s.frameHeight : null,
       // 送信元の解像度。w/h と食い違っていればダウンスケールが効いている
       srcW: src && num(src.width) ? src.width : null,
       srcH: src && num(src.height) ? src.height : null,
+      // カメラ（キャプチャ）側の fps。送信 fps と食い違えばエンコーダ側で落としている
+      srcFps: src && num(src.framesPerSecond) ? src.framesPerSecond : null,
+      // マイクの入力レベル（0〜1）。0 が続けばミュートか無音
+      audioLevel: src && num(src.audioLevel) ? src.audioLevel : null,
       fps: fpsOf(s, d, 'framesSent'),
       bps: rate(d('bytesSent'), d.dt),
       // 送信品質が落ちた原因が一発で分かる最重要項目
       limit: s.qualityLimitationReason && s.qualityLimitationReason !== 'none' ? s.qualityLimitationReason : null,
       targetBps: num(s.targetBitrate) ? s.targetBitrate : null,
+      // 制限がかかっていた時間（直近1サンプルでの増分）。limit は瞬間値なので割合はこちらで出す
+      limitCpuMs: limitDelta(s, st, 'cpu'),
+      limitBwMs: limitDelta(s, st, 'bandwidth'),
+      resChanges: d('qualityLimitationResolutionChanges'),
+      // 相手から届いた再送要求・キーフレーム要求と、それに応じた再送。受信側の nack / pli と対になる
+      nack: d('nackCount'),
+      pli: d('pliCount'),
+      fir: d('firCount'),
+      rtx: d('retransmittedPacketsSent'),
+      keyFrames: d('keyFramesEncoded'),
+      encodeMs: dEncodeSec !== null && dEncoded ? (dEncodeSec / dEncoded) * 1000 : null,
       rttMs: remote && num(remote.roundTripTime) ? remote.roundTripTime * 1000 : null,
       jitterMs: remote && num(remote.jitter) ? remote.jitter * 1000 : null,
       lossPct: remote && num(remote.fractionLost) ? remote.fractionLost * 100 : null,
@@ -298,6 +348,16 @@
     };
     fn.dt = dt;
     return fn;
+  }
+
+  /** qualityLimitationDurations（理由ごとの累積秒）の増分を ms で返す */
+  function limitDelta(s, st, reason) {
+    const p = st.prev.get(s.id);
+    const a = s.qualityLimitationDurations?.[reason];
+    const b = p?.qualityLimitationDurations?.[reason];
+    if (!num(a) || !num(b)) return null;
+    const dv = a - b;
+    return dv >= 0 ? dv * 1000 : null;
   }
 
   function rate(deltaBytes, dt) {
