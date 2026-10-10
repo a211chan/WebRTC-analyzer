@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>WebRTC Analyzer — レポートプレビュー（拡張なし）</title>
+<link rel="stylesheet" href="../src/report/report.css">
+<script src="shim.js"></script>
+</head>
+<body>
+<script>
+/*
+ * src/report/report.html を、合成した履歴で描画する。拡張を読み込まずに見た目を確かめるためのページ。
+ *   ?mode=good|warn|bad   1セッションの判定別
+ *   ?mode=multi           3セッションを1冊にまとめる
+ *   ?mode=sendonly        送信だけのセッション（受信レポートでは評価対象なし）
+ *   ?mode=recvonly        受信だけのセッション（送信レポートでは評価対象なし）
+ *   &dir=out              送信品質レポートを開く（省略時は受信）
+ */
+(async () => {
+  const load = (src) => new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+  const html = await (await fetch('../src/report/report.html')).text();
+  document.body.innerHTML = new DOMParser().parseFromString(html, 'text/html').body.innerHTML;
+  await load('../src/common/config.js');
+  await load('../src/common/export.js');
+
+  const q = new URLSearchParams(location.search);
+  const mode = q.get('mode') || 'warn';
+  const dir = q.get('dir') === 'out' ? 'out' : 'in';
+  const kinds = mode === 'multi' ? ['good', 'warn', 'bad'] : [mode];
+  const ids = [];
+  let t0 = Date.now() - 3 * 3600000;
+  for (const kind of kinds) {
+    ids.push(await seed(kind, t0));
+    t0 += 3600000;
+  }
+  history.replaceState(null, '', location.pathname + `?dir=${dir}&s=` + ids.join(','));
+  for (const f of ['report-lib.js', 'report-recv.js', 'report-send.js', 'report.js']) await load('../src/report/' + f);
+
+  async function seed(kind, start) {
+    const host = 'live.example.com';
+    const session = { id: WRA_EXPORT.newSessionId(), host, start, end: start, rows: 0, chunks: 0, browser: 'Google Chrome 141 / macOS', version: '0.6.0', intervalMs: 1000 };
+    const metas = {};
+    const rows = [];
+    const meta = (pcId, dir, kind, rid = '') => {
+      const k = `0|${pcId}|${dir}|${kind}|${rid}`;
+      metas[k] = { host, pcId, dir, kind, rid };
+      return k;
+    };
+    const N = 1800;
+    // bad は 1200 秒付近で接続が切れ、20 秒後に pc2 で張り直す
+    const cut = kind === 'bad' ? [1200, 1220] : null;
+    let freezes = 0, pauses = 0, pc = 'pc1';
+    for (let i = 0; i < N; i++) {
+      const t = start + i * 1000;
+      if (cut && i >= cut[0] && i < cut[1]) continue;
+      if (cut && i === cut[1]) { pc = 'pc2'; freezes = 0; pauses = 0; }
+      if (kind !== 'recvonly') sendRows(kind === 'sendonly' ? 'good' : kind, i, t, pc);
+      if (kind === 'sendonly') continue;
+      // 不調の区間: warn は 600〜660 秒で揺らぎとロス / bad はさらにフリーズと音声の欠け
+      const dip = kind !== 'good' && i > 600 && i < 660;
+      const storm = kind === 'bad' && i > 900 && i < 1000;
+      const connecting = i < 2 || (cut && i < cut[1] + 2 && i >= cut[1]);
+      const disconnected = kind === 'bad' && i >= cut[0] - 8 && i < cut[0];
+      const state = connecting ? 'connecting' : disconnected ? 'disconnected' : 'connected';
+      const recv = 90;
+      const lost = dip ? Math.round(recv * 0.012 * Math.random()) : storm ? Math.round(recv * 0.05 * Math.random()) : Math.random() < 0.01 ? 1 : 0;
+      let freezeMs = 0;
+      if ((kind === 'warn' && i === 630) || (kind === 'bad' && (i === 630 || i % 40 === 5 && storm))) { freezes++; freezeMs = 400 + Math.random() * 900; }
+      let pauseMs = 0;
+      if (kind === 'bad' && i === 1500) { pauses++; pauseMs = 6200; }
+      const res = dip || storm ? [960, 540] : [1280, 720];
+      const relay = kind === 'bad';
+      const common = {
+        t, state, route: relay ? 'relay→host' : 'srflx→host', pairChanges: 1, visible: !(kind === 'good' && i > 1300 && i < 1400),
+        rttMs: (relay ? 140 : 45) + Math.sin(i / 30) * 10 + (storm ? 120 : 0),
+      };
+      if (connecting) {
+        rows.push([meta(pc, 'in', 'video'), { ...common, ssrc: 1111, mid: '1' }]);
+        continue;
+      }
+      rows.push([meta(pc, 'in', 'video'), {
+        ...common, ssrc: 1111, mid: '1', w: res[0], h: res[1],
+        fps: storm ? 14 + Math.random() * 6 : dip ? 24 + Math.random() * 4 : 29.5 + Math.random(),
+        bps: (dip || storm ? 1.4e6 : 2.6e6) + Math.sin(i / 25) * 2e5, codec: 'video/H264',
+        jitterMs: (dip ? 22 : storm ? 40 : 6) + Math.random() * 4,
+        jbMs: (kind === 'good' ? 120 : 260) + (dip ? 260 : storm ? 520 : 0) + Math.random() * 30,
+        lossPct: (lost / (lost + recv)) * 100, pktRecv: recv, pktLost: lost,
+        freezes, freezeMs, pauses, pauseMs,
+        nack: lost ? lost + 1 : 0, rtx: lost, pli: storm && i % 40 === 4 ? 1 : 0, fir: 0, dropped: kind === 'bad' && i % 97 === 0 ? 2 : 0,
+        keyFrames: 0, decodeMs: 3 + Math.random(), discarded: 0,
+      }]);
+      rows.push([meta(pc, 'in', 'audio'), {
+        ...common, ssrc: 2222, mid: '0', bps: 32000 + Math.random() * 800, codec: 'audio/opus',
+        jitterMs: (dip ? 18 : 4) + Math.random() * 3, jbMs: (kind === 'good' ? 60 : 120) + (storm ? 300 : 0),
+        lossPct: 0, pktRecv: 50, pktLost: storm && Math.random() < 0.3 ? 2 : 0,
+        concealPct: storm ? 3 + Math.random() * 6 : dip ? 0.4 + Math.random() : Math.random() * 0.1, concealEvents: storm ? 1 : 0, discarded: 0,
+      }]);
+    }
+
+    /*
+     * 送信側。warn は 600〜700 秒で上り帯域が足りず解像度を落とす。
+     * bad はサイマルキャスト2層で、900〜1300 秒に CPU 不足、1500 秒付近で送信停止、終盤はマイクが無音。
+     */
+    function sendRows(kind, i, t, pc) {
+      const bwLimit = kind !== 'good' && i > 600 && i < 700;
+      const cpuLimit = kind === 'bad' && i > 900 && i < 1300;
+      const stopped = kind === 'bad' && i >= 1500 && i < 1512;
+      const relay = kind === 'bad';
+      const common = {
+        t, state: i < 2 ? 'connecting' : 'connected', route: relay ? 'relay→host' : 'srflx→host', pairChanges: 1, visible: true,
+        availOutBps: bwLimit ? 1.3e6 : 6e6 + Math.sin(i / 50) * 5e5,
+      };
+      if (i < 2) {
+        rows.push([meta(pc, 'out', 'video', kind === 'bad' ? 'f' : ''), { ...common, ssrc: 3333, mid: '1' }]);
+        return;
+      }
+      const limit = cpuLimit ? 'cpu' : bwLimit ? 'bandwidth' : null;
+      const res = cpuLimit ? [960, 540] : bwLimit ? [854, 480] : [1280, 720];
+      const remote = {
+        rttMs: (relay ? 150 : 40) + Math.sin(i / 30) * 8 + (cpuLimit && i % 50 < 5 ? 160 : 0),
+        jitterMs: 3 + Math.random() * 3,
+        lossPct: kind === 'bad' && i % 37 === 0 ? 3 + Math.random() * 4 : kind === 'warn' && bwLimit && i % 9 === 0 ? 0.8 : 0,
+      };
+      rows.push([meta(pc, 'out', 'video', kind === 'bad' ? 'f' : ''), {
+        ...common, ...remote, ssrc: 3333, mid: '1', w: res[0], h: res[1], srcW: 1280, srcH: 720, srcFps: 30,
+        fps: stopped ? 0 : cpuLimit ? 14 + Math.random() * 4 : bwLimit ? 24 + Math.random() * 3 : 29.5 + Math.random(),
+        bps: stopped ? 0 : (bwLimit ? 0.9e6 : cpuLimit ? 1.6e6 : 2.5e6) + Math.sin(i / 20) * 1e5,
+        targetBps: bwLimit ? 1e6 : 2.6e6, codec: 'video/H264', limit,
+        limitCpuMs: cpuLimit ? 1000 : 0, limitBwMs: bwLimit ? 1000 : 0, resChanges: 0,
+        nack: remote.lossPct ? 3 : 0, pli: kind === 'bad' && i % 120 === 0 ? 1 : 0, fir: 0, rtx: remote.lossPct ? 3 : 0,
+        keyFrames: i % 60 === 0 ? 1 : 0, encodeMs: cpuLimit ? 38 + Math.random() * 10 : 6 + Math.random() * 2,
+      }]);
+      if (kind === 'bad') {
+        rows.push([meta(pc, 'out', 'video', 'h'), {
+          ...common, ...remote, ssrc: 3334, mid: '1', w: 640, h: 360, srcW: 1280, srcH: 720, srcFps: 30,
+          fps: stopped ? 0 : 29.5, bps: stopped ? 0 : 5e5, targetBps: 5e5, codec: 'video/H264', encodeMs: 3,
+        }]);
+      }
+      rows.push([meta(pc, 'out', 'audio'), {
+        ...common, ...remote, ssrc: 4444, mid: '0', bps: 32000, targetBps: 32000, codec: 'audio/opus',
+        audioLevel: kind === 'bad' && i > 1600 ? 0 : 0.05 + Math.random() * 0.2,
+      }]);
+    }
+    for (let i = 0; i < rows.length; i += 600) {
+      const part = rows.slice(i, i + 600);
+      const m = {};
+      for (const [k] of part) m[k] = metas[k];
+      await WRA_EXPORT.writeChunk(session, m, part);
+    }
+    return session.id;
+  }
+})();
+</script>
+</body>
+</html>

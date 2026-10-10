@@ -6,7 +6,7 @@
  *   - chrome.storage.local に書き出した履歴の読み書き
  *
  * 保存形式（キーはすべて "wra:" で始まる。設定のキーとは衝突しない）
- *   wra:s:<sid>      セッションの概要 { id, host, start, end, rows, chunks }
+ *   wra:s:<sid>      セッションの概要 { id, host, start, end, rows, chunks, browser, version, intervalMs, dirs }
  *   wra:c:<sid>:<n>  n 番目の書き出し分 { metas: {k: meta}, rows: [[k, sample], ...] }
  *
  * 書き出しのたびに概要と新しいチャンクを足すだけで、既存のキーは読み直さない。
@@ -47,6 +47,32 @@
     ['avail_in_bps', (m, s) => round(s.availInBps, 0)],
     ['route', (m, s) => s.route],
     ['state', (m, s) => s.state],
+    /*
+     * 0.6.0 で追加。既存の列の位置を変えないよう末尾に足している。
+     * nack / pli / fir / 再送は、受信行では「自分が出した数」、送信行では「相手から届いた数（と再送した数）」。
+     */
+    ['visible', (m, s) => (s.visible == null ? null : s.visible ? 1 : 0)],
+    ['ssrc', (m, s) => s.ssrc],
+    ['mid', (m, s) => s.mid],
+    ['packets_received', (m, s) => s.pktRecv],
+    ['packets_lost', (m, s) => s.pktLost],
+    ['packets_discarded', (m, s) => s.discarded],
+    ['fir_count', (m, s) => s.fir],
+    ['key_frames', (m, s) => s.keyFrames],
+    ['pause_count', (m, s) => s.pauses],
+    ['pause_duration_ms', (m, s) => round(s.pauseMs, 0)],
+    ['decode_ms_per_frame', (m, s) => round(s.decodeMs, 2)],
+    ['concealed_pct', (m, s) => round(s.concealPct, 3)],
+    ['concealment_events', (m, s) => s.concealEvents],
+    ['source_width', (m, s) => s.srcW],
+    ['source_height', (m, s) => s.srcH],
+    ['source_fps', (m, s) => round(s.srcFps, 1)],
+    ['audio_level', (m, s) => round(s.audioLevel, 4)],
+    ['encode_ms_per_frame', (m, s) => round(s.encodeMs, 2)],
+    ['limit_cpu_ms', (m, s) => round(s.limitCpuMs, 0)],
+    ['limit_bandwidth_ms', (m, s) => round(s.limitBwMs, 0)],
+    ['resolution_changes', (m, s) => s.resChanges],
+    ['candidate_pair_changes', (m, s) => s.pairChanges],
   ];
 
   /** rows: [{ meta, s }] を時刻順に並べ済みで受け取り、{ text, mime } を返す */
@@ -73,8 +99,16 @@
   }
 
   function filename(kind, t = Date.now()) {
+    return `webrtc-${fileStamp(t)}.${kind}`;
+  }
+
+  /** ファイル名に使う日時（ローカル時刻）。YYYYMMDD-HHMMSS */
+  function fileStamp(t = Date.now()) {
     const d = new Date(t);
-    return `webrtc-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.${kind}`;
+    return (
+      `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-` +
+      `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+    );
   }
 
   // ------------------------------------------------------------ 永続化
@@ -174,6 +208,7 @@
     build,
     dataUrl,
     filename,
+    fileStamp,
     localStamp,
     newSessionId,
     writeChunk,
