@@ -14,6 +14,12 @@
  *       受信開始前（最初に connected でビットレートが出るまで）のサンプルは除く。
  *   - 回数（フリーズ）
  *       期間中の合計回数をしきい値と比べる。タブが非表示の間は数えない。
+ *
+ * 裏タブ（cfg.report.excludeBackground、既定 ON）
+ *   タブが非表示だった間と、戻ってから5秒は判定から外す。受信だけのタブでは実機で値の変化は
+ *   見られなかったが、同じタブで canvas などページ内の描画を送っていると送信が 1fps 前後まで
+ *   落ち、それを受けた側もフリーズ・低 fps になる。外した出来事はイベント一覧に残す。
+ *   OFF のときも、fps とフリーズだけは従来どおり非表示の間を数えない（描画が間引かれるため）。
  */
 (() => {
   'use strict';
@@ -63,12 +69,14 @@
     if (base !== audio) R.weigh(audio);
     const n = base.length;
 
-    let totalSec = 0, activeSec = 0, hiddenSec = 0;
+    let totalSec = 0, activeSec = 0;
     for (const s of base) {
       totalSec += s._dt;
       if (s.state === 'connected' && num(s.bps) && s.bps > 0) activeSec += s._dt;
-      if (s.visible === false) hiddenSec += s._dt;
     }
+    const hiddenSec = R.hiddenTime(base, step);
+    const bgSpans = cfg.report.excludeBackground ? R.backgroundSpans(base) : [];
+    const isBg = (t) => R.inSpans(bgSpans, t);
     // 受信開始。ここより前は ICE やキーフレーム待ちで値が荒れるので連続値の集計から除く
     const startT = base.find((s) => s.state === 'connected' && num(s.bps) && s.bps > 0)?.t ?? Infinity;
     const th = cfg.thresholds;
@@ -91,16 +99,17 @@
       rttMs: ser(base, 'rttMs'),
     };
 
+    // 判定は裏タブの時間帯を除いて行う（グラフには全部描き、その時間帯に灰色の帯を敷く）
     const cont = {};
-    for (const m of CONT) cont[m.key] = R.seriesStats(series[m.key], th[m.key]);
+    for (const m of CONT) cont[m.key] = R.seriesStats(series[m.key].filter((q) => !isBg(q.t)), th[m.key]);
 
     // ---- 出来事
     const events = [];
     const medBps = median(series.bps.filter((q) => q.v != null).map((q) => q.v));
 
     // フリーズと途切れ（pause）。累積値なので PeerConnection が変わったら数え直す
-    const fz = { total: 0, sec: 0 };
-    const pause = { total: 0, sec: 0 };
+    const fz = { total: 0, sec: 0, bgTotal: 0, bgSec: 0 };
+    const pause = { total: 0, sec: 0, bgTotal: 0 };
     let prevF = null, prevP = null, prevPc = null;
     video.forEach((s, i) => {
       if (s.pc !== prevPc) {
@@ -110,12 +119,19 @@
       if (num(s.freezes)) {
         const d = prevF == null ? 0 : s.freezes >= prevF ? s.freezes - prevF : s.freezes;
         prevF = s.freezes;
-        if (d > 0 && s.visible !== false) {
+        if (d > 0) {
           const sec = num(s.freezeMs) ? s.freezeMs / 1000 : null;
-          fz.total += d;
-          fz.sec += sec || 0;
           // 回数と時間はフリーズが明けたときに増えるので、始まりは時間ぶん遡る
-          events.push({ t: s.t - (sec || 0) * 1000, end: s.t, kind: 'freeze', n: d, sec, cause: freezeCause(video, i, medBps) });
+          const t = s.t - (sec || 0) * 1000;
+          const bg = s.visible === false || isBg(t) || isBg(s.t);
+          if (bg) {
+            fz.bgTotal += d;
+            fz.bgSec += sec || 0;
+          } else {
+            fz.total += d;
+            fz.sec += sec || 0;
+          }
+          events.push({ t, end: s.t, kind: 'freeze', n: d, sec, bg, cause: bg ? null : freezeCause(video, i, medBps) });
         }
       }
       if (num(s.pauses)) {
@@ -123,9 +139,14 @@
         prevP = s.pauses;
         if (d > 0) {
           const sec = num(s.pauseMs) ? s.pauseMs / 1000 : null;
-          pause.total += d;
-          pause.sec += sec || 0;
-          events.push({ t: s.t - (sec || 0) * 1000, end: s.t, kind: 'pause', n: d, sec });
+          const t = s.t - (sec || 0) * 1000;
+          const bg = s.visible === false || isBg(t) || isBg(s.t);
+          if (bg) pause.bgTotal += d;
+          else {
+            pause.total += d;
+            pause.sec += sec || 0;
+          }
+          events.push({ t, end: s.t, kind: 'pause', n: d, sec, bg });
         }
       }
     });
@@ -147,8 +168,9 @@
       if (s.t >= startT) resolutions.set(res, (resolutions.get(res) || 0) + s._dt);
       if (prevRes && prevRes.res !== res) {
         const isUp = s.w * s.h > prevRes.w * prevRes.h;
-        isUp ? up++ : dn++;
-        events.push({ t: s.t, kind: isUp ? 'resUp' : 'resDown', from: prevRes.res, to: res });
+        const bg = isBg(s.t);
+        if (!bg) isUp ? up++ : dn++;
+        events.push({ t: s.t, kind: isUp ? 'resUp' : 'resDown', from: prevRes.res, to: res, bg });
       }
       prevRes = { res, w: s.w, h: s.h };
     }
@@ -172,6 +194,8 @@
       totalSec,
       activeSec,
       hiddenSec,
+      bgSpans,
+      bgSec: R.spansSec(bgSpans, base[0]?.t ?? 0, base[n - 1]?.t ?? 0),
       cont,
       freeze: fz,
       pause,
@@ -286,7 +310,17 @@
     if (p.disconnects) notes.push(`接続が切れかけた（disconnected / failed）区間が ${p.disconnects} 回ありました。`);
     if (p.pause.total) notes.push(`5秒以上映像が届かない途切れが ${p.pause.total} 回（合計 ${fix(p.pause.sec, 1)} 秒）ありました。`);
     if (p.down > 0) notes.push(`受信解像度の引き下げが ${p.down} 回ありました（引き上げ ${p.up} 回）。`);
-    if (p.hiddenSec > p.totalSec * 0.1) notes.push(`タブが非表示だった時間が ${pct(p.hiddenSec / p.totalSec)} あり、その間のフレームレートとフリーズは集計から除いています。`);
+    if (p.bgSec > 0) {
+      const ex = [];
+      if (p.freeze.bgTotal) ex.push(`フリーズ ${p.freeze.bgTotal} 回`);
+      if (p.pause.bgTotal) ex.push(`途切れ ${p.pause.bgTotal} 回`);
+      notes.push(
+        `タブが裏に回っていた時間と戻った直後（計 ${dur(p.bgSec)}）は、ブラウザの省電力動作（タイマーや描画の間引き）の影響を受けうるため判定から除きました` +
+          (ex.length ? `（除外したもの: ${ex.join('、')}。イベント一覧に「裏タブ由来」として記載）。` : '。')
+      );
+    } else if (p.hiddenSec > p.totalSec * 0.1) {
+      notes.push(`タブが非表示だった時間が ${pct(p.hiddenSec / Math.max(p.totalSec, 1))} あり、その間のフレームレートとフリーズは集計から除いています。`);
+    }
     return R.summarySection({ verdict: p.verdict, lead, findings, notes, withBadge });
   }
 
@@ -380,9 +414,10 @@
     const c = cfg.report.charts;
     const th = cfg.thresholds;
     const s = p.series;
-    const bands = p.events.filter((e) => e.kind === 'freeze' || e.kind === 'pause');
+    const bands = p.events.filter((e) => (e.kind === 'freeze' || e.kind === 'pause') && !e.bg);
     const marks = p.events.filter((e) => e.kind === 'reconnect' || e.kind === 'disconnect').map((e) => e.t);
-    const one = (title, pts, opt = {}) => ({ title, series: [{ pts, cls: 's1', scale: opt.scale }], th: opt.th, cap: opt.cap, bands, marks });
+    const bgSpans = p.bgSpans;
+    const one = (title, pts, opt = {}) => ({ title, series: [{ pts, cls: 's1', scale: opt.scale }], th: opt.th, cap: opt.cap, bands, marks, bgSpans });
     const list = [];
     if (c.bitrate && p.video.length) list.push(one('受信ビットレート（映像、Mbps）', s.bps, { scale: 1e-6 }));
     if (c.fps && p.video.length) list.push(one('フレームレート（fps、タブ非表示中を除く）', s.fps, { th: th.fps }));
@@ -390,7 +425,11 @@
     if (c.loss) list.push(one('パケットロス率（%、20% で頭打ち）', s.lossPct, { th: th.lossPct, cap: 20 }));
     if (c.rtt) list.push(one('往復遅延 RTT（ms）', s.rttMs, { th: th.rttMs }));
     if (c.conceal && p.audio.length) list.push(one('音声の補間率（%、50% で頭打ち）', s.concealPct, { th: th.concealPct, cap: 50 }));
-    return R.chartsSection(p, list, '<span class="lg band"></span>フリーズ・途切れ <span class="lg err"></span>再接続・切断');
+    return R.chartsSection(
+      p,
+      list,
+      '<span class="lg band"></span>フリーズ・途切れ <span class="lg err"></span>再接続・切断' + (p.bgSpans.length ? ' <span class="lg bg"></span>裏タブ（判定対象外）' : '')
+    );
   }
 
   const EVENT_DEFS = {
@@ -433,7 +472,7 @@
     );
   }
 
-  function conditions(p, session, other) {
+  function conditions(p, session, other, cfg) {
     const others = [];
     if (p.extra.video) others.push(`映像 ${p.extra.video} 本`);
     if (p.extra.audio) others.push(`音声 ${p.extra.audio} 本`);
@@ -443,7 +482,8 @@
       ['記録期間', `${stamp(p.start)} 〜 ${stamp(p.end)}（${dur(p.totalSec)}）`],
       ['サンプル', `${p.n} 件 / 間隔 ${fix(p.step / 1000, 1)} 秒${p.holes ? `（記録の欠け ${p.holes} 箇所）` : ''}`],
       ['受信していない時間', `${dur(Math.max(0, p.totalSec - p.activeSec))}（接続前・切断中を含む）`],
-      ['タブ非表示', `${dur(p.hiddenSec)}（フレームレートとフリーズの集計から除外）`],
+      ['タブ非表示', `${dur(p.hiddenSec)}`],
+      ['判定から除いた時間', p.bgSpans.length ? `${dur(p.bgSec)}（裏タブの間と、戻ってから5秒）` : cfg.report.excludeBackground ? 'なし' : '除かない設定（fps とフリーズだけ非表示の間を除く）'],
       ['評価の対象', `受信のみ${other ? '（送信したストリームは対象外）' : ''}`],
       ['集計外の受信', others.length ? `${others.join('・')}（同じ接続で並行して受信していたもの）` : 'なし'],
       ['計測した拡張', session.version ? `v${session.version}` : '0.6.0 より前'],
@@ -453,9 +493,10 @@
   function criteria(cfg) {
     const th = cfg.thresholds;
     return R.criteriaSection(
-      'しきい値は WebRTC Analyzer の設定画面の値です。連続値は受信開始後のサンプルだけを使い、一時的な跳ねで判定が振れないよう分布の端（5%点）をしきい値と比べます。重大が1つでもあれば「不良」、警告が1つでもあれば「注意」、それ以外を「良好」とします。ジッター（到着間隔のばらつき）は参考値として受信ストリームの章に載せ、判定には使いません。',
+      'しきい値は WebRTC Analyzer の設定画面の値です。連続値は受信開始後のサンプルだけを使い、一時的な跳ねで判定が振れないよう分布の端（5%点）をしきい値と比べます。重大が1つでもあれば「不良」、警告が1つでもあれば「注意」、それ以外を「良好」とします。ジッター（到着間隔のばらつき）は参考値として受信ストリームの章に載せ、判定には使いません。' +
+        R.backgroundRule(cfg),
       [
-        ['フリーズ', th.freeze, '回', '期間中の合計（タブ非表示中を除く）'],
+        ['フリーズ', th.freeze, '回', '期間中の合計（タブ非表示中は常に除く）'],
         ['パケットロス率', th.lossPct, '%', '上位5%値（サンプルごと、映像と音声の合算）'],
         ['ジッターバッファ遅延', th.bufferMs, 'ms', '上位5%値（映像。映像が無ければ音声）'],
         ['フレームレート', th.fps, 'fps', '下位5%値（映像、タブ非表示中を除く）'],

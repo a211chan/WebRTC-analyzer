@@ -41,6 +41,8 @@
   /**
    * サンプルごとの重み（秒）を s._dt に入れる。中央値の3倍を超える間は「記録の欠け」とみなし、
    * 重みに数えない。PeerConnection（s.pc）の切り替わりは欠けではなく再接続として別に数える。
+   * 裏タブではブラウザがタイマーを間引くことがあるので、非表示どうしの間隔は欠けに数えない
+   * （WebRTC を使うページは強い間引きの対象外だが、仕様が変わっても誤判定しないように）。
    */
   function weigh(arr) {
     const gaps = [];
@@ -54,10 +56,63 @@
         return;
       }
       const g = s.t - prev.t;
-      if (g > step * 3) holes++;
+      if (g > step * 3 && !(s.visible === false && prev.visible === false)) holes++;
       s._dt = Math.min(g, step * 3) / 1000;
     });
     return { step, holes };
+  }
+
+  /** タブが非表示だった実時間（秒）。重み用の _dt は上限で切ってあるので、間隔をそのまま足す */
+  function hiddenTime(arr, step) {
+    let sec = 0;
+    arr.forEach((s, i) => {
+      if (s.visible !== false) return;
+      const prev = arr[i - 1];
+      sec += prev && prev.pc === s.pc ? (s.t - prev.t) / 1000 : step / 1000;
+    });
+    return sec;
+  }
+
+  /** 戻ってから判定に戻すまでの猶予。実機では送信 fps が戻るまで1〜2秒だった */
+  const BG_GRACE_MS = 5000;
+
+  /**
+   * 裏タブの影響を受けうる時間帯 [開始, 終了] の配列。タブが非表示だったサンプルと、
+   * 戻ってから BG_GRACE_MS の間。visible を持たない古い記録は「表示中」とみなす。
+   */
+  function backgroundSpans(arr) {
+    const spans = [];
+    let a = null;
+    arr.forEach((s, i) => {
+      if (s.visible === false) {
+        if (a == null) a = arr[i - 1] ? arr[i - 1].t + 1 : s.t;
+        return;
+      }
+      if (a != null) {
+        spans.push([a, s.t + BG_GRACE_MS]);
+        a = null;
+      }
+    });
+    if (a != null) spans.push([a, arr[arr.length - 1].t]);
+    // 猶予が次の非表示と重なったらつなぐ
+    const out = [];
+    for (const sp of spans) {
+      const last = out[out.length - 1];
+      if (last && sp[0] <= last[1]) last[1] = Math.max(last[1], sp[1]);
+      else out.push(sp);
+    }
+    return out;
+  }
+
+  /** 時刻 t が区間のどれかに入るか */
+  function inSpans(spans, t) {
+    for (const [a, b] of spans) if (t >= a && t <= b) return true;
+    return false;
+  }
+
+  /** 区間の合計秒。記録期間の外にはみ出した分は数えない */
+  function spansSec(spans, start, end) {
+    return spans.reduce((a, [x, y]) => a + Math.max(0, Math.min(y, end) - Math.max(x, start)) / 1000, 0);
   }
 
   /** 接続中の時間で重み付けした平均。startT より前は数えない */
@@ -321,6 +376,13 @@
     return `警告 ${f(t.warn)} / 重大 ${f(t.crit)}`;
   }
 
+  /** 判定基準の章に添える、裏タブの扱いの説明 */
+  function backgroundRule(cfg) {
+    return cfg.report.excludeBackground
+      ? 'タブが裏に回っていた間と、戻ってから5秒は、ブラウザの省電力動作（タイマーや描画の間引き）の影響を受けうるため、すべての指標の判定から除きます（設定で変更できます）。'
+      : '裏タブの時間帯も判定に含めています（設定で除く設定にできます）。';
+  }
+
   /** 判定基準の表。rows: [指標, しきい値, 単位, 比べる値] */
   function criteriaSection(intro, rows) {
     return `
@@ -355,7 +417,11 @@
           <tbody>
           ${list
             .slice(0, EVENT_LIMIT)
-            .map((e) => `<tr><td>${esc(stamp(e.t).slice(11, 19))}</td><td><span class="tag ${defs[e.kind][1]}">${defs[e.kind][0]}</span></td><td>${esc(detail(e))}</td></tr>`)
+            .map(
+              (e) =>
+                `<tr${e.bg ? ' class="bgrow"' : ''}><td>${esc(stamp(e.t).slice(11, 19))}</td><td><span class="tag ${e.bg ? '' : defs[e.kind][1]}">${defs[e.kind][0]}</span></td>` +
+                `<td>${esc(detail(e))}${e.bg ? '<span class="bgnote">裏タブ由来（判定対象外）</span>' : ''}</td></tr>`
+            )
             .join('')}
           </tbody>
         </table>
@@ -467,6 +533,11 @@
     for (const b of ch.bands || []) {
       const xa = x(b.t), xb = Math.max(x(b.end || b.t), xa + 1.5);
       svg += `<rect class="band" x="${xa}" y="${T}" width="${xb - xa}" height="${H - T - B}"/>`;
+    }
+    // 裏タブで判定から外した時間帯（灰色）。判定の対象外だと分かるよう、ほかの帯の上に重ねる
+    for (const [a, b] of ch.bgSpans || []) {
+      const xa = x(Math.max(a, t0)), xb = Math.max(x(Math.min(b, t1)), xa + 1.5);
+      svg += `<rect class="bgband" x="${xa}" y="${T}" width="${xb - xa}" height="${H - T - B}"/>`;
     }
     for (const t of ch.marks || []) svg += `<line class="err" x1="${x(t)}" x2="${x(t)}" y1="${T}" y2="${H - B}"/>`;
     if (ch.th) {
@@ -587,6 +658,10 @@
     median,
     quantile,
     weigh,
+    hiddenTime,
+    backgroundSpans,
+    inSpans,
+    spansSec,
     weightedMean,
     contStats,
     seriesStats,
@@ -605,6 +680,7 @@
     judgementSection,
     limits,
     criteriaSection,
+    backgroundRule,
     eventSection,
     commonDetail,
     shareTable,

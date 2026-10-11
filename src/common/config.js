@@ -97,6 +97,12 @@
       author: '',
       /** 複数セッションを選んだとき: 'combined' = 1冊にまとめる / 'separate' = セッションごとに別タブ */
       mode: 'combined',
+      /*
+       * 裏タブの間と、戻った直後を判定から外す。ブラウザは裏タブのタイマーや描画を省電力のために
+       * 間引くので、ページ内で描いた映像（canvas・エフェクト）の送信 fps が 1fps 前後まで落ちる。
+       * 配信経路や端末性能の問題ではないので、既定では判定から外して所見とイベントに残す。
+       */
+      excludeBackground: true,
       /** 出す章。false にすると章ごと省く */
       sections: {
         summary: true,
@@ -157,6 +163,7 @@
       if (typeof r.sendTitle === 'string') out.report.sendTitle = r.sendTitle;
       if (typeof r.author === 'string') out.report.author = r.author;
       if (r.mode === 'combined' || r.mode === 'separate') out.report.mode = r.mode;
+      if (typeof r.excludeBackground === 'boolean') out.report.excludeBackground = r.excludeBackground;
       for (const g of ['sections', 'charts', 'sendCharts']) {
         if (!r[g]) continue;
         for (const [k, v] of Object.entries(r[g])) {

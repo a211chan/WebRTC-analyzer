@@ -35,16 +35,28 @@
   draw();
 
   (async () => {
-    const stream = canvas.captureStream(30);
+    /*
+     * ?src=camera ならカメラ・マイク（getUserMedia）を送る。canvas は setInterval で描くので、
+     * タブを裏に回すとタイマーの間引きで送信の fps まで落ちる。受信側だけの影響を見たいときは
+     * camera を使う（Chrome を --use-fake-device-for-media-stream で起動すれば疑似デバイスになる）。
+     */
+    const useCamera = new URLSearchParams(location.search).get('src') === 'camera';
+    let stream;
+    if (useCamera) {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 360, frameRate: 30 }, audio: true });
+      document.getElementById('src').replaceWith(Object.assign(document.createElement('video'), { srcObject: stream, autoplay: true, muted: true, playsInline: true }));
+    } else {
+      stream = canvas.captureStream(30);
 
-    // 音声トラックも足して audio 行の表示を確認する
-    const ac = new AudioContext();
-    const osc = ac.createOscillator();
-    const dest = ac.createMediaStreamDestination();
-    osc.frequency.value = 440;
-    osc.connect(dest);
-    osc.start();
-    stream.addTrack(dest.stream.getAudioTracks()[0]);
+      // 音声トラックも足して audio 行の表示を確認する
+      const ac = new AudioContext();
+      const osc = ac.createOscillator();
+      const dest = ac.createMediaStreamDestination();
+      osc.frequency.value = 440;
+      osc.connect(dest);
+      osc.start();
+      stream.addTrack(dest.stream.getAudioTracks()[0]);
+    }
 
     const pc1 = new RTCPeerConnection();
     const pc2 = new RTCPeerConnection();

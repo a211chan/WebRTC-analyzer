@@ -133,6 +133,12 @@
     <span class="hint">まとめると冒頭にセッションの比較表が付く。分けるとセッションごとに別タブで開く</span>
   </div>
 
+  <label class="row">
+    <span class="label">裏タブの扱い</span>
+    <span class="ctl"><input type="checkbox" id="reportExcludeBg"> 裏タブの間と、戻った直後（5秒）を判定から除く</span>
+    <span class="hint">ブラウザは裏タブのタイマーや描画を省電力のために間引くため、ページ内で描いた映像（canvas・背景ぼかしなどのエフェクト）を送っていると送信 fps が 1fps 前後まで落ちる。配信経路や端末性能の問題ではないので既定では除く（除いた出来事もイベント一覧と所見には残る）</span>
+  </label>
+
   <h3>含める章</h3>
   <div id="reportSections" class="fields"></div>
 

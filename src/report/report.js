@@ -89,7 +89,7 @@
       if (sec.charts) html += S.charts(p, cfg);
       if (sec.events) html += S.events(p);
       if (sec.stream) html += S.stream(p);
-      if (sec.conditions) html += S.conditions(p, session, other);
+      if (sec.conditions) html += S.conditions(p, session, other, cfg);
       html += '</article>';
     });
 

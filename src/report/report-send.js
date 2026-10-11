@@ -14,6 +14,13 @@
  *       ロス率と RTT は受け手からの受信報告（RTCP の remote-inbound-rtp）。SFU や配信サーバーを
  *       経由する場合、受け手はサーバーなので「送信者からサーバーまで」の区間の値になる。
  *   送信開始前（最初に connected でビットレートが出るまで）のサンプルは除く。
+ *
+ * 裏タブ（cfg.report.excludeBackground、既定 ON）
+ *   ブラウザは裏タブのタイマーと描画を省電力のために間引く。ページ内で描いた映像（canvas・
+ *   requestAnimationFrame で作るエフェクトなど）を送っていると、送信 fps が 1fps 前後まで落ちる
+ *   （実機で確認。カメラを直接送る場合は落ちない）。配信経路や端末性能の問題ではないので、
+ *   非表示の間と戻ってから5秒は判定から外す。ただし受け手にはその映像がそのまま届いているので、
+ *   落ちていたことは所見に必ず書く。外した出来事はイベント一覧に残す。
  */
 (() => {
   'use strict';
@@ -68,12 +75,14 @@
     if (base !== audio) R.weigh(audio);
     const n = base.length;
 
-    let totalSec = 0, activeSec = 0, hiddenSec = 0;
+    let totalSec = 0, activeSec = 0;
     for (const s of base) {
       totalSec += s._dt;
       if (s.state === 'connected' && num(s.bps) && s.bps > 0) activeSec += s._dt;
-      if (s.visible === false) hiddenSec += s._dt;
     }
+    const hiddenSec = R.hiddenTime(base, step);
+    const bgSpans = cfg.report.excludeBackground ? R.backgroundSpans(base) : [];
+    const isBg = (t) => R.inSpans(bgSpans, t);
     const startT = base.find((s) => s.state === 'connected' && num(s.bps) && s.bps > 0)?.t ?? Infinity;
     const th = cfg.thresholds;
 
@@ -90,13 +99,14 @@
     };
 
     const cont = {};
-    for (const m of CONT) cont[m.key] = R.seriesStats(series[m.key], th[m.key]);
+    // 判定は裏タブの時間帯を除いて行う（グラフには全部描き、その時間帯に灰色の帯を敷く）
+    for (const m of CONT) cont[m.key] = R.seriesStats(series[m.key].filter((q) => !isBg(q.t)), th[m.key]);
 
     // ---- 品質制限
     const limit = { cpuSec: 0, bwSec: 0 };
     const hasDur = video.some((s) => num(s.limitCpuMs) || num(s.limitBwMs));
     for (const s of video) {
-      if (s.t < startT) continue;
+      if (s.t < startT || isBg(s.t)) continue;
       if (hasDur) {
         limit.cpuSec += (s.limitCpuMs || 0) / 1000;
         limit.bwSec += (s.limitBwMs || 0) / 1000;
@@ -107,7 +117,7 @@
         limit.bwSec += s._dt;
       }
     }
-    const videoSec = video.filter((s) => s.t >= startT && s.state === 'connected').reduce((a, s) => a + s._dt, 0);
+    const videoSec = video.filter((s) => s.t >= startT && s.state === 'connected' && !isBg(s.t)).reduce((a, s) => a + s._dt, 0);
     limit.baseSec = videoSec;
     limit.ratio = videoSec ? Math.min(1, (limit.cpuSec + limit.bwSec) / videoSec) : null;
     limit.level = limit.ratio == null ? LV.ok : R.levelOf(th.limitPct, limit.ratio * 100);
@@ -124,7 +134,7 @@
       }
       const reason = s.limit === 'cpu' || s.limit === 'bandwidth' ? s.limit : null;
       if (reason && (!cur || cur.reason !== reason)) {
-        cur = { t: s.t, end: s.t, kind: 'limit', reason, minRes: null };
+        cur = { t: s.t, end: s.t, kind: 'limit', reason, minRes: null, bg: isBg(s.t) };
         events.push(cur);
       } else if (!reason) {
         cur = null;
@@ -155,7 +165,11 @@
         stop = null;
       }
     }
-    for (const e of events) if (e.kind === 'stop') e.sec = (e.end - e.t) / 1000 + step / 1000;
+    for (const e of events) {
+      if (e.kind !== 'stop') continue;
+      e.sec = (e.end - e.t) / 1000 + step / 1000;
+      e.bg = isBg(e.t);
+    }
 
     // 解像度の変化（評価対象のレイヤー）
     let up = 0, dn = 0, prevRes = null;
@@ -171,8 +185,9 @@
       if (s.t >= startT) resolutions.set(res, (resolutions.get(res) || 0) + s._dt);
       if (prevRes && prevRes.res !== res) {
         const isUp = s.w * s.h > prevRes.w * prevRes.h;
-        isUp ? up++ : dn++;
-        events.push({ t: s.t, kind: isUp ? 'resUp' : 'resDown', from: prevRes.res, to: res, reason: s.limit || null });
+        const bg = isBg(s.t);
+        if (!bg) isUp ? up++ : dn++;
+        events.push({ t: s.t, kind: isUp ? 'resUp' : 'resDown', from: prevRes.res, to: res, reason: s.limit || null, bg });
       }
       prevRes = { res, w: s.w, h: s.h };
     }
@@ -204,12 +219,18 @@
       totalSec,
       activeSec,
       hiddenSec,
+      bgSpans,
+      bgSec: R.spansSec(bgSpans, base[0]?.t ?? 0, base[n - 1]?.t ?? 0),
+      // 裏タブの間の送信 fps とカメラ fps。落ちていたら所見で「受け手にも届いていた」と書く
+      bgFps: median(after(video).filter((s) => s.visible === false).map((s) => s.fps).filter(num)),
+      bgSrcFps: median(after(video).filter((s) => s.visible === false).map((s) => s.srcFps).filter(num)),
       cont,
       limit,
       events,
       up,
       down: dn,
-      stops: events.filter((e) => e.kind === 'stop'),
+      stops: events.filter((e) => e.kind === 'stop' && !e.bg),
+      bgStops: events.filter((e) => e.kind === 'stop' && e.bg).length,
       reconnects: pcs.length - 1,
       disconnects: events.filter((e) => e.kind === 'disconnect').length,
       topRid,
@@ -226,7 +247,7 @@
       availBps: median(pick(base, 'availOutBps')),
       res: resLabel(median(pick(video, 'w')), median(pick(video, 'h'))),
       src: resLabel(srcW, srcH),
-      srcFps: median(pick(video, 'srcFps')),
+      srcFps: median(after(video).filter((s) => !isBg(s.t)).map((s) => s.srcFps).filter(num)),
       encodeMs: median(pick(video, 'encodeMs')),
       codecs: {
         video: [...new Set(video.map((s) => s.codec).filter(Boolean))],
@@ -307,11 +328,34 @@
     const notes = [];
     if (p.reconnects) notes.push(`接続が ${p.reconnects} 回張り直されました（再接続）。途切れていた時間はイベント一覧にあります。`);
     if (p.disconnects) notes.push(`接続が切れかけた（disconnected / failed）区間が ${p.disconnects} 回ありました。`);
+    const bgNote = backgroundNote(p);
+    if (bgNote) notes.unshift(bgNote);
     if (p.stops.length) notes.push(`接続中に映像の送信がほぼ止まった区間が ${p.stops.length} 回（合計 ${fix(p.stops.reduce((a, e) => a + e.sec, 0), 1)} 秒）ありました。カメラの停止や映像 OFF の操作でも起きます。`);
     if (p.down > 0) notes.push(`送信解像度の引き下げが ${p.down} 回ありました（引き上げ ${p.up} 回）。`);
     if (p.requests.pli > 0) notes.push(`受け手からキーフレーム要求（PLI）が ${p.requests.pli} 回届きました。受け手側で映像が欠けていた目安です。`);
     if (p.silentRatio != null && p.silentRatio > 0.1) notes.push(`マイクの入力が無音だった時間が ${pct(p.silentRatio)} あります。ミュートしていたか、入力デバイスを確認してください。`);
     return R.summarySection({ verdict: p.verdict, lead, findings, notes, withBadge });
+  }
+
+  /**
+   * 裏タブについての所見。判定からは外しても、送信 fps が落ちていたなら受け手にもそのまま
+   * 届いているので、黙って消さずに原因と対処を書く。
+   */
+  function backgroundNote(p) {
+    const fg = p.cont.fps.median;
+    const dropped = p.bgFps != null && fg != null && fg > 0 && p.bgFps < fg * 0.5;
+    if (dropped) {
+      return (
+        `タブが裏に回っていた間（${dur(p.hiddenSec)}）、送信のフレームレートが中央値 ${fix(p.bgFps, 1)} fps（表示中は ${fix(fg, 1)} fps）に落ちており、受け手にもそのまま届いていました。` +
+        (p.bgSrcFps != null && p.bgSrcFps < fg * 0.5 ? '映像の元（キャプチャ）の時点で落ちているので、' : '') +
+        'ページ内で描いた映像（canvas・背景ぼかしなどのエフェクト）は、裏タブではブラウザが描画を省電力のために間引くためです。配信中は送信しているタブを前面に置くか、別ウィンドウに分けてください。' +
+        (p.bgSpans.length ? 'この時間帯（戻ってから5秒を含む）は判定から除いています。' : '')
+      );
+    }
+    if (p.bgSec > 0) {
+      return `タブが裏に回っていた時間と戻った直後（計 ${dur(p.bgSec)}）は、ブラウザの省電力動作の影響を受けうるため判定から除きました。この間の送信フレームレートに低下は見られませんでした。`;
+    }
+    return null;
   }
 
   function findingsOf(p, cfg) {
@@ -405,7 +449,8 @@
     const c = cfg.report.sendCharts;
     const th = cfg.thresholds;
     const s = p.series;
-    const bands = p.events.filter((e) => e.kind === 'limit' || e.kind === 'stop');
+    const bands = p.events.filter((e) => (e.kind === 'limit' || e.kind === 'stop') && !e.bg);
+    const bgSpans = p.bgSpans;
     const marks = p.events.filter((e) => e.kind === 'reconnect' || e.kind === 'disconnect').map((e) => e.t);
     const list = [];
     if (c.bitrate && p.video.length) {
@@ -433,7 +478,12 @@
     }
     if (c.loss) list.push({ title: 'パケットロス率（受け手の報告、%、20% で頭打ち）', series: [{ pts: s.lossPct, cls: 's1' }], th: th.lossPct, cap: 20, bands, marks });
     if (c.rtt) list.push({ title: '往復遅延 RTT（ms）', series: [{ pts: s.rttMs, cls: 's1' }], th: th.rttMs, bands, marks });
-    return R.chartsSection(p, list, '<span class="lg band"></span>品質制限・送信停止 <span class="lg err"></span>再接続・切断');
+    for (const ch of list) ch.bgSpans = bgSpans;
+    return R.chartsSection(
+      p,
+      list,
+      '<span class="lg band"></span>品質制限・送信停止 <span class="lg err"></span>再接続・切断' + (bgSpans.length ? ' <span class="lg bg"></span>裏タブ（判定対象外）' : '')
+    );
   }
 
   const EVENT_DEFS = {
@@ -488,7 +538,7 @@
     );
   }
 
-  function conditions(p, session, other) {
+  function conditions(p, session, other, cfg) {
     return R.kvSection('計測条件', [
       ['対象ホスト', session.host],
       ['ブラウザ', session.browser || '記録なし'],
@@ -496,6 +546,7 @@
       ['サンプル', `${p.n} 件 / 間隔 ${fix(p.step / 1000, 1)} 秒${p.holes ? `（記録の欠け ${p.holes} 箇所）` : ''}`],
       ['送信していない時間', `${dur(Math.max(0, p.totalSec - p.activeSec))}（接続前・切断中を含む）`],
       ['タブ非表示', dur(p.hiddenSec)],
+      ['判定から除いた時間', p.bgSpans.length ? `${dur(p.bgSec)}（裏タブの間と、戻ってから5秒）` : cfg.report.excludeBackground ? 'なし' : '除かない設定'],
       ['評価の対象', `送信のみ${other ? '（受信したストリームは対象外）' : ''}`],
       ['評価したレイヤー', p.layers.length > 1 ? `${p.topRid || '—'}（全 ${p.layers.length} レイヤーのうち最も解像度の高いもの）` : '単一'],
       ['計測した拡張', session.version ? `v${session.version}` : '0.6.0 より前'],
@@ -505,7 +556,8 @@
   function criteria(cfg) {
     const th = cfg.thresholds;
     return R.criteriaSection(
-      'しきい値は WebRTC Analyzer の設定画面の値です。連続値は送信開始後のサンプルだけを使い、一時的な跳ねで判定が振れないよう分布の端（5%点）をしきい値と比べます。パケットロス率と RTT は受け手からの受信報告（RTCP）に基づき、SFU や配信サーバーを経由する場合はサーバーまでの区間の値です。重大が1つでもあれば「不良」、警告が1つでもあれば「注意」、それ以外を「良好」とします。',
+      'しきい値は WebRTC Analyzer の設定画面の値です。連続値は送信開始後のサンプルだけを使い、一時的な跳ねで判定が振れないよう分布の端（5%点）をしきい値と比べます。パケットロス率と RTT は受け手からの受信報告（RTCP）に基づき、SFU や配信サーバーを経由する場合はサーバーまでの区間の値です。重大が1つでもあれば「不良」、警告が1つでもあれば「注意」、それ以外を「良好」とします。' +
+        R.backgroundRule(cfg),
       [
         ['品質制限', th.limitPct, '%', '期間中に CPU・帯域の制限がかかっていた時間の割合（映像）'],
         ['フレームレート', th.fps, 'fps', '下位5%値（送信映像。サイマルキャストは最上位レイヤー）'],

@@ -81,6 +81,26 @@ CSV は **BOM 付き UTF-8 + CRLF**、日時は `time_local` 列に `YYYY-MM-DD 
 - 重大が1つでもあれば「不良」、警告が1つでもあれば「注意」
 - 同じページの中で、前の PeerConnection が閉じてから張られた PeerConnection は再接続とみなし、1つの視聴（配信）としてつなぐ。つなぎ目は「再接続」として途切れた秒数を出す
 
+#### 裏タブ（ブラウザの省電力動作）の扱い
+
+ブラウザは、裏に回ったタブのタイマーや描画を省電力のために間引く。Chromium 141 で、ループバック検証ページを90秒〜6分40秒裏に回して確かめた結果は次のとおり。
+
+| 対象 | 裏タブでの変化 |
+|---|---|
+| 計測（getStats のポーリング） | 1秒間隔のまま。WebRTC を使っているページは、5分を超えた裏タブのタイマーを最大1分に1回まで絞る強い間引きの対象外 |
+| 受信（受け取った映像・音声） | fps・ビットレート・フリーズ・ジッターバッファとも変化なし。`<video>` の自動一時停止も起きない（HLS 版と違い、`srcObject` の映像は止まらない） |
+| 送信（カメラを直接送る） | 変化なし |
+| 送信（ページ内で描いた映像を送る） | canvas・`requestAnimationFrame` で作る映像（背景ぼかしなどのエフェクトを含む）は描画が間引かれ、**送信 fps が 30 → 1fps 前後**、ビットレートも大きく落ちる。戻ると1〜2秒で回復する。受け手にもそのまま 1fps で届き、受け手側ではフリーズが続く |
+
+最後の行は配信経路や端末性能の問題ではないので、レポートでは既定で**裏タブの間と戻ってから5秒を判定から除く**（設定画面の「裏タブの扱い」で切り替え）。
+
+- 除いた時間帯はグラフに灰色の帯で示し、その間に起きたフリーズ・送信停止・解像度の変化はイベント一覧に「裏タブ由来（判定対象外）」として残す
+- 送信レポートでは、裏の間に送信 fps が落ちていた場合、判定からは外したうえで「受け手にもそのまま届いていた」ことと対処（送信タブを前面に置く・別ウィンドウに分ける）を所見に書く
+- 裏の間にタイマーが間引かれて記録の間隔が空いても「記録の欠け」に数えず、非表示の時間は実時間で出す
+- 除く設定を OFF にしても、受信の fps とフリーズは従来どおり非表示の間を数えない
+
+実機の記録は `test/fixtures/` に置いてあり、`test/report-preview.html?mode=fixture&f=bg-canvas&dir=out` で再現できる（`&excl=0` で除外 OFF と比べられる）。検証ページは `test/loopback.html?src=camera` でカメラ・マイクを送る（Chrome を `--use-fake-device-for-media-stream` で起動すれば疑似デバイスになる）。
+
 #### 受信品質レポート
 
 | 章 | 内容 |
@@ -254,10 +274,10 @@ python3 test/serve.py
 
 | URL | 用途 |
 |---|---|
-| http://localhost:8731/test/loopback.html | 拡張を読み込んだ状態で開く。右上に小窓が出れば成功 |
+| http://localhost:8731/test/loopback.html | 拡張を読み込んだ状態で開く。右上に小窓が出れば成功。`?src=camera` で canvas の代わりにカメラ・マイクを送る |
 | http://localhost:8731/test/standalone.html | 拡張なしで収集と描画だけを検証（`test/shim.js` が chrome.* を代替） |
 | http://localhost:8731/test/options-preview.html | 拡張なしで設定画面を検証 |
-| http://localhost:8731/test/report-preview.html | 拡張なしでレポートを検証。合成した履歴で描画する（`?mode=good` / `warn` / `bad` / `multi` / `sendonly` / `recvonly`、送信レポートは `&dir=out`） |
+| http://localhost:8731/test/report-preview.html | 拡張なしでレポートを検証。合成した履歴で描画する（`?mode=good` / `warn` / `bad` / `multi` / `sendonly` / `recvonly`、送信レポートは `&dir=out`）。`?mode=fixture&f=bg-canvas` などで実機の記録を開く |
 
 loopback / standalone の「video を直接全画面」ボタンは、`<video>` 要素そのものを全画面にするプレーヤーの再現用。
 
