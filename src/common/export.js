@@ -73,6 +73,24 @@
     ['limit_bandwidth_ms', (m, s) => round(s.limitBwMs, 0)],
     ['resolution_changes', (m, s) => s.resChanges],
     ['candidate_pair_changes', (m, s) => s.pairChanges],
+    // 表示状態・画面構成と、制限理由ごとの時間割合（マルチディスプレイでの遮蔽誤判定の切り分け用）
+    ['limit_cpu_pct', (m, s) => round(s.limCpuPct, 1)],
+    ['limit_bandwidth_pct', (m, s) => round(s.limBwPct, 1)],
+    ['limit_other_pct', (m, s) => round(s.limOtherPct, 1)],
+    ['page_visibility', (m, s) => s.vis],
+    ['page_hidden_pct', (m, s) => round(s.hiddenPct, 1)],
+    ['page_visibility_changes', (m, s) => s.visChanges],
+    ['page_focus', (m, s) => s.focus],
+    ['screen_extended', (m, s) => s.extended],
+    ['screen_width', (m, s) => s.scrW],
+    ['screen_height', (m, s) => s.scrH],
+    ['device_pixel_ratio', (m, s) => s.dpr],
+    ['window_x', (m, s) => s.winX],
+    ['window_y', (m, s) => s.winY],
+    ['video_element_px_w', (m, s) => s.elW],
+    ['video_element_px_h', (m, s) => s.elH],
+    ['video_intrinsic_w', (m, s) => s.vidW],
+    ['video_intrinsic_h', (m, s) => s.vidH],
   ];
 
   /** rows: [{ meta, s }] を時刻順に並べ済みで受け取り、{ text, mime } を返す */

@@ -33,6 +33,9 @@
     // ここで形を作り直し、以降の層には既知の形しか流さない。
     const pcs = sanitize(data.pcs);
     if (!pcs.length) return;
+    // ページの表示状態はフレーム単位だが、描画層は PC 単位で持つので各 PC に載せる
+    const env = envRow(data.env);
+    for (const pc of pcs) pc.env = env;
 
     try {
       chrome.runtime.sendMessage({
@@ -144,7 +147,39 @@
       resChanges: num(s.resChanges),
       rttMs: num(s.rttMs),
       limit: str(s.limit, 32),
+      limCpuPct: pct(s.limCpuPct),
+      limBwPct: pct(s.limBwPct),
+      limOtherPct: pct(s.limOtherPct),
       codec: str(s.codec, 64),
+    };
+  }
+
+  function pct(v) {
+    const n = num(v);
+    return n === null ? null : Math.min(100, Math.max(0, n));
+  }
+
+  function bool(v) {
+    return typeof v === 'boolean' ? v : null;
+  }
+
+  function envRow(e) {
+    if (!e || typeof e !== 'object') return null;
+    return {
+      vis: e.vis === 'hidden' || e.vis === 'visible' ? e.vis : null,
+      hiddenPct: pct(e.hiddenPct),
+      visChanges: num(e.visChanges),
+      focus: bool(e.focus),
+      extended: bool(e.extended),
+      dpr: num(e.dpr),
+      scrW: num(e.scrW),
+      scrH: num(e.scrH),
+      winX: num(e.winX),
+      winY: num(e.winY),
+      vidW: num(e.vidW),
+      vidH: num(e.vidH),
+      elW: num(e.elW),
+      elH: num(e.elH),
     };
   }
 

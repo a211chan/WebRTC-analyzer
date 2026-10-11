@@ -173,7 +173,13 @@ CSV は **BOM 付き UTF-8 + CRLF**、日時は `time_local` 列に `YYYY-MM-DD 
 | rtt | `candidate-pair.currentRoundTripTime`（送信側は `remote-inbound-rtp.roundTripTime`） |
 | target | `outbound-rtp.targetBitrate` |
 | limit | `outbound-rtp.qualityLimitationReason`。`cpu` / `bandwidth` なら送信側がボトルネック |
+| lim cpu / lim bw / lim other | `qualityLimitationDurations` の差分。直近区間のうち各理由で制限されていた時間の割合。瞬間値の `limit` では拾えない断続的な制限が見える |
+| res chg | `qualityLimitationResolutionChanges` の増分。制限による解像度の切り替え回数 |
 | src | 送信元の解像度。表示解像度と違えばダウンスケールが効いている |
+| page | `document.visibilityState`。`hidden` は裏タブ、またはウィンドウが隠れているとブラウザが判定した状態（赤）。前面にあっても直近区間に hidden が挟まれば割合を出す（黄） |
+| focus | `document.hasFocus()` |
+| screen | `screen.isExtended`（multi / single）、画面サイズ、`devicePixelRatio` |
+| view | 再生中で最大の `<video>` の表示サイズ（物理px）← 実映像サイズ。表示が実映像の半分未満なら黄 |
 | avail↑ / avail↓ | `candidate-pair` の `availableOutgoingBitrate` / `availableIncomingBitrate` |
 | conceal | `concealedSamples ÷ totalSamplesReceived` の差分比。受信音声のうち補間で埋めた割合 |
 
@@ -185,6 +191,19 @@ CSV は **BOM 付き UTF-8 + CRLF**、日時は `time_local` 列に `YYYY-MM-DD 
 | どれも増えずに freeze | 供給側（エンコーダ / CDN）がデータを出していない |
 | `pli` | キーフレーム待ちで固まっている |
 | `dropped` | 届いてはいるが表示が間に合っていない。デコード / 描画側 |
+
+### マルチディスプレイで解像度・FPS が上がらないとき
+
+Chromium（特に Windows）はウィンドウが他のウィンドウに覆われていると判定すると、そのタブを裏タブと同じ `hidden` として扱い、タイマーの間引きや描画停止をかける。デュアル・トリプルディスプレイや DPI の異なるモニタが混在する環境では、見えているのにこの判定が誤って働くことがある。`page` / `screen` / `view` と `lim *` を同じ時間軸に並べると、原因を次のように切り分けられる。
+
+| 見えているもの | 読み方 |
+|---|---|
+| `page` が hidden（または hidden %）と同時に fps / 解像度が落ちる | 遮蔽・裏タブ判定によるもの。Windows なら `--disable-features=CalculateNativeWinOcclusion` を付けて起動し、再現するかを確かめる |
+| `page` は visible で `lim cpu` が高い | 送信側の CPU / エンコード負荷。高解像度の複数画面キャプチャで起きやすい |
+| `page` は visible で `lim bw` が高い | 帯域推定による制限 |
+| `view` の表示サイズが実映像より小さい | プレーヤーや SFU が表示サイズに合わせて低いレイヤーを選んでいる可能性 |
+
+エクスポートの `page_*` / `screen_*` / `window_x,y` / `limit_*_pct` 列で、どのモニタに置いたときに落ちたかを後から追える。
 
 ### エクスポートだけに入る値
 
