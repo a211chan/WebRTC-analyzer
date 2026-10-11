@@ -55,6 +55,8 @@
       rtx: false,
       dropped: false,
       freezeDur: false,
+      // 受信音声の補間率。音声の途切れは他の項目に出ないので既定で出す
+      conceal: true,
     },
 
     /*
@@ -66,24 +68,84 @@
      * 上昇の兆候を掴むには 150ms では遅すぎる。
      */
     thresholds: {
-      jitterMs: { warn: 30, crit: 50 },
-      bufferMs: { warn: 450, crit: 700 },
-      lossPct: { warn: 0.5, crit: 2 },
-      rttMs: { warn: 100, crit: 200 },
+      jitterMs: { dir: 'above', warn: 30, crit: 50 },
+      bufferMs: { dir: 'above', warn: 450, crit: 700 },
+      lossPct: { dir: 'above', warn: 0.5, crit: 2 },
+      rttMs: { dir: 'above', warn: 100, crit: 200 },
       /** 直近1サンプルでのフリーズ増分 */
-      freeze: { warn: 1, crit: 3 },
+      freeze: { dir: 'above', warn: 1, crit: 3 },
+      /*
+       * 受信映像のフレームレート。ほかと違い「低いほど悪い」ので dir: 'below'。
+       * dir は仕様なので設定画面からは変えられない。15fps で配信している場合は
+       * 常に警告になるので、配信側の fps に合わせて下げるか空欄にする。
+       */
+      fps: { dir: 'below', warn: 20, crit: 10 },
+      /** 受信音声の補間率(%)。欠けた音声を推測で埋めたサンプルの割合 */
+      concealPct: { dir: 'above', warn: 1, crit: 5 },
+      /*
+       * 送信映像に CPU・帯域による品質制限がかかっていた時間の割合(%)。
+       * 期間全体で1つの値なので送信レポートだけが使う（小窓は limit の理由を色で出す）。
+       */
+      limitPct: { dir: 'above', warn: 10, crit: 30 },
+    },
+
+    /*
+     * 受信品質レポート（印刷用HTML → ブラウザの「PDFに保存」）。
+     * 判定は上の thresholds をそのまま使う。レポート専用のしきい値は持たない。
+     */
+    report: {
+      /** 表紙に出す題名（受信 / 送信） */
+      title: 'WebRTC 受信品質レポート',
+      sendTitle: 'WebRTC 送信品質レポート',
+      /** 作成者・提出先など。空なら出さない */
+      author: '',
+      /** 複数セッションを選んだとき: 'combined' = 1冊にまとめる / 'separate' = セッションごとに別タブ */
+      mode: 'combined',
+      /*
+       * 裏タブの間と、戻った直後を判定から外す。ブラウザは裏タブのタイマーや描画を省電力のために
+       * 間引くので、ページ内で描いた映像（canvas・エフェクト）の送信 fps が 1fps 前後まで落ちる。
+       * 配信経路や端末性能の問題ではないので、既定では判定から外して所見とイベントに残す。
+       */
+      excludeBackground: true,
+      /** 出す章。false にすると章ごと省く */
+      sections: {
+        summary: true,
+        kpi: true,
+        judgement: true,
+        charts: true,
+        events: true,
+        stream: true,
+        conditions: true,
+        criteria: true,
+      },
+      /** 時系列グラフの種類（受信レポート） */
+      charts: {
+        bitrate: true,
+        fps: true,
+        buffer: true,
+        loss: true,
+        rtt: true,
+        conceal: true,
+      },
+      /** 時系列グラフの種類（送信レポート） */
+      sendCharts: {
+        bitrate: true,
+        fps: true,
+        loss: true,
+        rtt: true,
+      },
     },
   };
 
   const KEYS = Object.keys(DEFAULTS);
 
-  /** 保存済みの値を既定値に重ねる。入れ子（fields / thresholds）は項目単位でマージする */
+  /** 保存済みの値を既定値に重ねる。入れ子（fields / thresholds / report）は項目単位でマージする */
   function merge(stored) {
     const out = structuredClone(DEFAULTS);
     if (!stored) return out;
 
     for (const k of KEYS) {
-      if (k === 'fields' || k === 'thresholds') continue;
+      if (k === 'fields' || k === 'thresholds' || k === 'report') continue;
       if (stored[k] != null) out[k] = stored[k];
     }
     if (stored.fields) {
@@ -93,7 +155,24 @@
     }
     if (stored.thresholds) {
       for (const [k, v] of Object.entries(stored.thresholds)) {
-        if (out.thresholds[k] && v) Object.assign(out.thresholds[k], v);
+        if (!out.thresholds[k] || !v) continue;
+        // dir は保存値で上書きさせない
+        if ('warn' in v) out.thresholds[k].warn = v.warn;
+        if ('crit' in v) out.thresholds[k].crit = v.crit;
+      }
+    }
+    const r = stored.report;
+    if (r && typeof r === 'object') {
+      if (typeof r.title === 'string') out.report.title = r.title;
+      if (typeof r.sendTitle === 'string') out.report.sendTitle = r.sendTitle;
+      if (typeof r.author === 'string') out.report.author = r.author;
+      if (r.mode === 'combined' || r.mode === 'separate') out.report.mode = r.mode;
+      if (typeof r.excludeBackground === 'boolean') out.report.excludeBackground = r.excludeBackground;
+      for (const g of ['sections', 'charts', 'sendCharts']) {
+        if (!r[g]) continue;
+        for (const [k, v] of Object.entries(r[g])) {
+          if (k in out.report[g]) out.report[g][k] = v === true;
+        }
       }
     }
     return out;
