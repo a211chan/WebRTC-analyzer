@@ -97,10 +97,24 @@
       lossPct: s.lossPct, freezes: s.freezes ?? null,
       nack: s.nack ?? null, pli: s.pli ?? null, rtx: s.rtx ?? null,
       dropped: s.dropped ?? null, freezeMs: s.freezeMs ?? null,
+      fir: s.fir ?? null, keyFrames: s.keyFrames ?? null, discarded: s.discarded ?? null,
+      pauses: s.pauses ?? null, pauseMs: s.pauseMs ?? null,
+      decodeMs: s.decodeMs ?? null, encodeMs: s.encodeMs ?? null,
+      pktRecv: s.pktRecv ?? null, pktLost: s.pktLost ?? null,
+      concealPct: s.concealPct ?? null, concealEvents: s.concealEvents ?? null,
+      srcW: s.srcW ?? null, srcH: s.srcH ?? null, srcFps: s.srcFps ?? null, audioLevel: s.audioLevel ?? null,
+      limitCpuMs: s.limitCpuMs ?? null, limitBwMs: s.limitBwMs ?? null, resChanges: s.resChanges ?? null,
+      // 再接続や SSRC 変更の検出用。履歴のキーには含めず、サンプルに載せる
+      ssrc: s.ssrc ?? null, mid: s.mid ?? null,
       // 送信は remote-inbound-rtp 由来のRTT、受信はPC全体のRTTを使う
       rttMs: s.rttMs ?? pc.rttMs ?? null,
       limit: s.limit ?? null, codec: s.codec ?? null,
-      state: pc.state, route: pc.route ?? null,
+      state: pc.state, route: pc.route ?? null, pairChanges: pc.pairChanges ?? null,
+      /*
+       * タブが表示されていたか。非表示のタブはブラウザが描画を間引くので、
+       * 受信側の fps・dropped はその間の値を品質評価に使えない。
+       */
+      visible: !document.hidden,
       /*
        * availableOutgoingBitrate は candidate-pair の値で、送信が1本も無くても
        * 既定値（Chrome では 300kbps）が入ってくる。受信専用の接続でこれを載せると
@@ -117,9 +131,19 @@
 
     if (IS_TOP && cfg.persist) {
       persist.metas[key] = h.meta;
-      persist.rows.push([key, h.samples[h.samples.length - 1]]);
+      persist.rows.push([key, compact(h.samples[h.samples.length - 1])]);
       if (!persist.timer) persist.timer = setTimeout(flush, PERSIST_MS);
     }
+  }
+
+  /**
+   * 保存用に null の項目を落とす。送信・受信・映像・音声で使う項目が違うため、1行の半分以上は
+   * null になる。読み出し側（export.js / レポート）は欠けた項目を null と同じに扱う。
+   */
+  function compact(sample) {
+    const out = {};
+    for (const k in sample) if (sample[k] != null) out[k] = sample[k];
+    return out;
   }
 
   // ------------------------------------------------------------- 永続化
@@ -137,16 +161,39 @@
     persist.timer = null;
     if (!persist.rows.length) return;
     if (!persist.session) {
-      persist.session = { id: WRA_EXPORT.newSessionId(), host: location.host || 'page', start: Date.now(), end: 0, rows: 0, chunks: 0 };
+      persist.session = {
+        id: WRA_EXPORT.newSessionId(),
+        host: location.host || 'page',
+        start: Date.now(),
+        end: 0,
+        rows: 0,
+        chunks: 0,
+        // レポートの「計測条件」用。URL のパスは載せない（PRIVACY.md）
+        browser: browserLabel(),
+        version: chrome.runtime.getManifest?.().version ?? null,
+        intervalMs: cfg.intervalMs,
+      };
       // 新しいセッションを始めるついでに、保持期限を過ぎたものを掃除する
       WRA_EXPORT.prune(cfg.persistHours).catch(() => {});
     }
     const { metas, rows } = persist;
+    // 設定画面が「受信 / 送信レポート」のボタンを出し分けるために、含む向きを概要に持たせる
+    persist.session.dirs ||= {};
+    for (const m of Object.values(metas)) persist.session.dirs[m.dir] = true;
     persist.metas = {};
     persist.rows = [];
     WRA_EXPORT.writeChunk(persist.session, metas, rows).catch(() => {
       // 拡張の再読み込み直後など。取りこぼしは許容する（メモリ上の履歴は残っている）
     });
+  }
+
+  /** 「Chrome 141 / Windows」の形。userAgentData が無い環境は UA 文字列から拾う */
+  function browserLabel() {
+    const ua = navigator.userAgentData;
+    const brand = ua?.brands?.find((b) => !/Not.?A.?Brand|Chromium/i.test(b.brand)) || ua?.brands?.find((b) => /Chromium/i.test(b.brand));
+    const name = brand ? `${brand.brand} ${brand.version}` : (navigator.userAgent.match(/(Edg|Chrome)\/(\d+)/) || []).slice(1).join(' ') || null;
+    const os = ua?.platform || null;
+    return [name, os].filter(Boolean).join(' / ') || null;
   }
 
   // 離脱時に残りを書く。完了を待てないので最善努力
@@ -484,7 +531,10 @@
     const lossLv = level('lossPct', s.lossPct);
     const rttLv = level('rttMs', s.rttMs);
     const freezeLv = level('freeze', freezeDelta(samples));
-    const crit = [jitterLv, bufferLv, lossLv, rttLv, freezeLv].filter((l) => l === 'crit').length;
+    // fps は受信映像だけ判定する。送信側の fps は送り手の設定次第で、低くても劣化とは限らない
+    const fpsLv = s.dir === 'in' && s.kind === 'video' ? level('fps', s.fps) : '';
+    const concealLv = level('concealPct', s.concealPct);
+    const crit = [jitterLv, bufferLv, lossLv, rttLv, freezeLv, fpsLv, concealLv].filter((l) => l === 'crit').length;
 
     const items =
       s.dir === 'in'
@@ -494,6 +544,7 @@
             { key: 'loss', label: 'loss', value: pct(s.lossPct), level: lossLv, field: 'lossPct' },
             { key: 'buffer', label: 'buffer', value: ms(s.jbMs), level: bufferLv, field: 'jbMs' },
             { key: 'freeze', label: 'freeze', value: s.freezes != null ? String(s.freezes) : null, level: freezeLv, field: 'freezes' },
+            { key: 'conceal', label: 'conceal', value: pct(s.concealPct), level: concealLv, field: 'concealPct' },
             // 以下は直近1サンプルでの増分。loss 0% なのに固まる原因の切り分けに使う
             { key: 'freezeDur', label: 'frz time', value: ms(s.freezeMs), level: s.freezeMs > 0 ? 'warn' : '', field: 'freezeMs' },
             { key: 'nack', label: 'nack', value: count(s.nack), field: 'nack' },
@@ -515,22 +566,25 @@
     return {
       crit,
       html: `<div class="stream">
-        ${streamHead(s.dir === 'in' ? '↓' : '↑', s.dir, s)}
+        ${streamHead(s.dir === 'in' ? '↓' : '↑', s.dir, s, fpsLv)}
         ${metrics(s, items, samples)}
       </div>`,
     };
   }
 
-  function streamHead(arrow, dir, s) {
-    const res = cfg.fields.resolution && s.w && s.h ? `${s.w}×${s.h}` : null;
-    const f = cfg.fields.fps && s.fps != null ? `${s.fps < 10 ? s.fps.toFixed(1) : Math.round(s.fps)}fps` : null;
+  function streamHead(arrow, dir, s, fpsLv) {
+    const res = cfg.fields.resolution && s.w && s.h ? esc(`${s.w}×${s.h}`) : null;
+    const f =
+      cfg.fields.fps && s.fps != null
+        ? `<span class="v ${fpsLv || ''}">${esc(`${s.fps < 10 ? s.fps.toFixed(1) : Math.round(s.fps)}fps`)}</span>`
+        : null;
     // 音声には解像度もFPSも無い。ビットレートは下の一覧に出るので見出しは空でよい。
     const main = [res, f].filter(Boolean).join(' ');
     const kind = s.rid ? `${s.kind}·${s.rid}` : s.kind;
     return `<div class="stream-head">
       <span class="arrow ${dir}">${arrow}</span>
       <span class="kind">${esc(kind)}</span>
-      <span class="head-main">${esc(main)}</span>
+      <span class="head-main">${main}</span>
       <span class="codec">${cfg.fields.codec ? esc(codec(s.codec)) : ''}</span>
     </div>`;
   }
@@ -619,8 +673,10 @@
     if (!cfg.alerts || v == null) return '';
     const t = cfg.thresholds[metric];
     if (!t) return '';
-    if (t.crit != null && v >= t.crit) return 'crit';
-    if (t.warn != null && v >= t.warn) return 'warn';
+    // fps のように「低いほど悪い」指標は dir: 'below'
+    const hit = (lim) => lim != null && (t.dir === 'below' ? v <= lim : v >= lim);
+    if (hit(t.crit)) return 'crit';
+    if (hit(t.warn)) return 'warn';
     return '';
   }
 
