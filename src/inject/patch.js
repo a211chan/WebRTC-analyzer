@@ -109,7 +109,7 @@
       }
     }
 
-    post(pcs);
+    post(pcs, pageEnv());
 
     // 監視対象が無くなったらタイマーを止める（非WebRTCページのコストをゼロにする）
     if (conns.size === 0) {
@@ -124,10 +124,109 @@
     }
   }
 
-  function post(pcs) {
+  function post(pcs, env) {
     // 同一 window 内のリスナ（= ページ本体と拡張の ISOLATED world）にのみ届く。
     // 受信側は e.source === window と __wraChannel の両方を検証すること。
-    window.postMessage({ __wraChannel: CHANNEL, type: 'stats', pcs }, '*');
+    window.postMessage({ __wraChannel: CHANNEL, type: 'stats', pcs, env }, '*');
+  }
+
+  // --------------------------------------------------------------- page env
+
+  /*
+   * ページ（タブ／ウィンドウ）の表示状態。マルチディスプレイ環境では Chromium の
+   * ウィンドウ遮蔽判定（Native Window Occlusion）が誤爆し、前面に見えているのに
+   * visibilityState が hidden になることがある。hidden になるとタイマー間引きや
+   * 描画停止が起き、受信側の要求レイヤーや送信側のキャプチャ fps が落ちる。
+   * 「解像度・fps が上がらない」原因がこれかどうかを、統計と同じ時間軸で残す。
+   *
+   * visibilitychange はポーリング間隔より短い hidden も拾えるよう、イベントで
+   * 累積しておき、サンプルごとに「直近区間のうち hidden だった割合」を出す。
+   */
+  const vis = {
+    since: performance.now(),
+    hiddenFrom: document.hidden ? performance.now() : 0,
+    hiddenMs: 0,
+    changes: 0,
+  };
+
+  document.addEventListener(
+    'visibilitychange',
+    () => {
+      const now = performance.now();
+      vis.changes++;
+      if (document.hidden) {
+        if (!vis.hiddenFrom) vis.hiddenFrom = now;
+      } else if (vis.hiddenFrom) {
+        vis.hiddenMs += now - vis.hiddenFrom;
+        vis.hiddenFrom = 0;
+      }
+    },
+    true
+  );
+
+  function pageEnv() {
+    const now = performance.now();
+    if (vis.hiddenFrom) {
+      vis.hiddenMs += now - vis.hiddenFrom;
+      vis.hiddenFrom = now;
+    }
+    const span = now - vis.since;
+    const env = {
+      vis: document.visibilityState,
+      hiddenPct: span > 0 ? Math.min(100, (vis.hiddenMs / span) * 100) : null,
+      visChanges: vis.changes,
+      focus: safe(() => document.hasFocus()),
+      // Window Management API。拡張ディスプレイがあれば true（権限不要で読める）
+      extended: safe(() => (typeof screen.isExtended === 'boolean' ? screen.isExtended : null)),
+      dpr: num(window.devicePixelRatio) ? window.devicePixelRatio : null,
+      scrW: num(screen.width) ? screen.width : null,
+      scrH: num(screen.height) ? screen.height : null,
+      // ウィンドウの左上がどのディスプレイ寄りにあるかの手掛かり（負ならプライマリの左/上）
+      winX: num(window.screenX) ? window.screenX : null,
+      winY: num(window.screenY) ? window.screenY : null,
+      ...videoSize(),
+    };
+    vis.since = now;
+    vis.hiddenMs = 0;
+    vis.changes = 0;
+    return env;
+  }
+
+  /**
+   * 再生中の <video> のうち最大のものについて、表示サイズ（物理px）と実映像サイズ。
+   * 表示サイズが小さいと、プレーヤーや SFU が低いレイヤーしか要求しないことがある。
+   */
+  function videoSize() {
+    let best = null;
+    let area = 0;
+    try {
+      for (const v of document.querySelectorAll('video')) {
+        if (!v.videoWidth || v.paused) continue;
+        const a = v.clientWidth * v.clientHeight;
+        if (a >= area) {
+          area = a;
+          best = v;
+        }
+      }
+    } catch (_) {
+      /* 取れなくても本体の計測は続ける */
+    }
+    if (!best) return { vidW: null, vidH: null, elW: null, elH: null };
+    const dpr = window.devicePixelRatio || 1;
+    return {
+      vidW: best.videoWidth,
+      vidH: best.videoHeight,
+      elW: Math.round(best.clientWidth * dpr),
+      elH: Math.round(best.clientHeight * dpr),
+    };
+  }
+
+  function safe(fn) {
+    try {
+      return fn();
+    } catch (_) {
+      return null;
+    }
   }
 
   // -------------------------------------------------------------- summarize
@@ -270,11 +369,36 @@
       // 送信品質が落ちた原因が一発で分かる最重要項目
       limit: s.qualityLimitationReason && s.qualityLimitationReason !== 'none' ? s.qualityLimitationReason : null,
       targetBps: num(s.targetBitrate) ? s.targetBitrate : null,
+      // 直近区間のうち、各理由で品質が制限されていた時間の割合（%）
+      ...limitShare(s, st),
+      // 制限による解像度変更の回数（直近区間の増分）
+      resChanges: d('qualityLimitationResolutionChanges'),
       rttMs: remote && num(remote.roundTripTime) ? remote.roundTripTime * 1000 : null,
       jitterMs: remote && num(remote.jitter) ? remote.jitter * 1000 : null,
       lossPct: remote && num(remote.fractionLost) ? remote.fractionLost * 100 : null,
       codec: byId.get(s.codecId)?.mimeType ?? null,
     };
+  }
+
+  /**
+   * qualityLimitationDurations（理由ごとの累積秒）の差分から、直近区間の内訳を出す。
+   * qualityLimitationReason はその瞬間の値なので、出たり消えたりする制限を取りこぼす。
+   */
+  function limitShare(s, st) {
+    const out = { limCpuPct: null, limBwPct: null, limOtherPct: null };
+    const cur = s.qualityLimitationDurations;
+    const p = st.prev.get(s.id);
+    const prev = p && p.qualityLimitationDurations;
+    if (!cur || !prev || typeof cur !== 'object' || typeof prev !== 'object') return out;
+
+    const delta = (k) => (num(cur[k]) && num(prev[k]) && cur[k] >= prev[k] ? cur[k] - prev[k] : 0);
+    const parts = { none: delta('none'), cpu: delta('cpu'), bandwidth: delta('bandwidth'), other: delta('other') };
+    const total = parts.none + parts.cpu + parts.bandwidth + parts.other;
+    if (!(total > 0)) return out;
+    out.limCpuPct = (parts.cpu / total) * 100;
+    out.limBwPct = (parts.bandwidth / total) * 100;
+    out.limOtherPct = (parts.other / total) * 100;
+    return out;
   }
 
   // ----------------------------------------------------------------- helpers

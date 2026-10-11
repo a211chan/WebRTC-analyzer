@@ -45,6 +45,10 @@
       rtt: true,
       limit: true,
       src: true,
+      // 裏タブ／ウィンドウ遮蔽の誤判定（マルチディスプレイ）を見抜くための表示状態
+      page: true,
+      // 送信品質の制限理由ごとの時間割合と、それによる解像度変更回数
+      limShare: true,
       // 再送・フリーズの切り分け用。小窓が縦に伸びるので既定では出さない
       nack: false,
       pli: false,

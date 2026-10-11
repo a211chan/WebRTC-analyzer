@@ -100,6 +100,16 @@
       // 送信は remote-inbound-rtp 由来のRTT、受信はPC全体のRTTを使う
       rttMs: s.rttMs ?? pc.rttMs ?? null,
       limit: s.limit ?? null, codec: s.codec ?? null,
+      limCpuPct: s.limCpuPct ?? null, limBwPct: s.limBwPct ?? null, limOtherPct: s.limOtherPct ?? null,
+      resChanges: s.resChanges ?? null,
+      // ページの表示状態。裏タブ／ウィンドウ遮蔽の誤判定で品質が落ちていないかを追う
+      vis: pc.env?.vis ?? null, hiddenPct: pc.env?.hiddenPct ?? null,
+      visChanges: pc.env?.visChanges ?? null, focus: pc.env?.focus ?? null,
+      extended: pc.env?.extended ?? null, dpr: pc.env?.dpr ?? null,
+      scrW: pc.env?.scrW ?? null, scrH: pc.env?.scrH ?? null,
+      winX: pc.env?.winX ?? null, winY: pc.env?.winY ?? null,
+      vidW: pc.env?.vidW ?? null, vidH: pc.env?.vidH ?? null,
+      elW: pc.env?.elW ?? null, elH: pc.env?.elH ?? null,
       state: pc.state, route: pc.route ?? null,
       /*
        * availableOutgoingBitrate は candidate-pair の値で、送信が1本も無くても
@@ -454,7 +464,9 @@
       { key: 'rtt', label: 'rtt', value: ms(pc.rttMs), level: rttLv, field: 'rttMs' },
       { key: 'avail', label: 'avail↑', value: pc.outbound.length ? bps(pc.availOutBps) : null, field: 'availOutBps' },
       { key: 'avail', label: 'avail↓', value: pc.inbound.length ? bps(pc.availInBps) : null, field: 'availInBps' },
+      ...pageItems(pc.env),
     ], firstSamples(key));
+    if (pc.env?.vis === 'hidden' && cfg.alerts) crit++;
 
     const streams = [...pc.inbound, ...pc.outbound].map((s) => {
       const r = renderStream(key, s);
@@ -509,6 +521,10 @@
             { key: 'loss', label: 'loss', value: pct(s.lossPct), level: lossLv, field: 'lossPct' },
             // 送信品質が落ちた原因。ここが cpu / bandwidth なら送信側がボトルネック
             { key: 'limit', label: 'limit', value: s.limit, level: s.limit ? 'warn' : '' },
+            { key: 'limShare', label: 'lim cpu', value: share(s.limCpuPct), level: s.limCpuPct > 0 ? 'warn' : '', field: 'limCpuPct' },
+            { key: 'limShare', label: 'lim bw', value: share(s.limBwPct), level: s.limBwPct > 0 ? 'warn' : '', field: 'limBwPct' },
+            { key: 'limShare', label: 'lim other', value: share(s.limOtherPct), level: s.limOtherPct > 0 ? 'warn' : '', field: 'limOtherPct' },
+            { key: 'limShare', label: 'res chg', value: s.resChanges ? String(s.resChanges) : null, level: 'warn', field: 'resChanges' },
             { key: 'src', label: 'src', value: s.srcW && s.w && s.srcW !== s.w ? `${s.srcW}×${s.srcH}` : null, level: 'warn' },
           ];
 
@@ -559,6 +575,30 @@
       )
       .join('');
     return `<div class="kvs">${rows}</div>`;
+  }
+
+  /**
+   * ページの表示状態。hidden は「裏タブ」または「ウィンドウが隠れている」と
+   * ブラウザが判定した状態で、マルチディスプレイでは誤判定のことがある。
+   */
+  function pageItems(env) {
+    if (!env) return [];
+    const hiddenNow = env.vis === 'hidden';
+    const partly = !hiddenNow && env.hiddenPct > 0;
+    const page = hiddenNow ? 'hidden' : partly ? `visible (hidden ${Math.round(env.hiddenPct)}%)` : env.vis;
+    const screens =
+      env.scrW && env.scrH
+        ? `${env.extended ? 'multi' : env.extended === false ? 'single' : '?'} ${env.scrW}×${env.scrH}` +
+          (env.dpr ? ` @${+env.dpr.toFixed(2)}x` : '')
+        : null;
+    // 表示サイズより実映像が大きければ問題ない。表示が小さいとレイヤーが下がりうる
+    const view = env.elW && env.vidW ? `${env.elW}×${env.elH} ← ${env.vidW}×${env.vidH}` : null;
+    return [
+      { key: 'page', label: 'page', value: page, level: hiddenNow ? 'crit' : partly ? 'warn' : '', field: 'hiddenPct' },
+      { key: 'page', label: 'focus', value: env.focus == null ? null : env.focus ? 'yes' : 'no' },
+      { key: 'page', label: 'screen', value: screens, level: env.extended ? 'warn' : '' },
+      { key: 'page', label: 'view', value: view, level: env.elW && env.vidW && env.elW < env.vidW / 2 ? 'warn' : '' },
+    ];
   }
 
   /** PC単位の値（rtt/帯域）用に、そのPCのどれか1本のストリーム履歴を借りる */
@@ -679,6 +719,10 @@
 
   function count(v) {
     return v == null ? null : String(v);
+  }
+
+  function share(v) {
+    return v == null ? null : Math.round(v) + ' %';
   }
 
   function pct(v) {
