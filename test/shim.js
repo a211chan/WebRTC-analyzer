@@ -9,7 +9,6 @@
   const msgListeners = [];
   const changeListeners = [];
   const store = Object.create(null);
-  let ui = null;
 
   window.chrome = {
     runtime: {
@@ -19,12 +18,9 @@
           console.log('[shim] download', msg.filename, msg.url.length, 'bytes (data URL)');
           return Promise.resolve({ ok: true });
         }
-        // 小窓の位置。実物は storage.session にタブ単位で持つ
-        if (msg?.type === 'ui-get') return Promise.resolve(ui);
-        if (msg?.type === 'ui-set') {
-          ui = { pos: msg.pos || null };
-          return Promise.resolve();
-        }
+        // ログウィンドウ。拡張なしでは開けないので、常に「映していない」と答える
+        if (msg?.type === 'logwin-get') return Promise.resolve({ open: false });
+        if (msg?.type === 'logwin-open' || msg?.type === 'mirror') return Promise.resolve();
 
         // sw.js と同じ振る舞い: frameId を付けて折り返す
         const payload = { ...msg, frameId: 0 };
@@ -65,6 +61,17 @@
         },
       },
       onChanged: { addListener: (fn) => changeListeners.push(fn) },
+    },
+    // 設定画面プレビュー用。デュアルモニター（右にサブディスプレイ）を装う
+    system: {
+      display: {
+        getInfo: () =>
+          Promise.resolve([
+            { id: '1', name: 'Built-in Display', isPrimary: true, bounds: { left: 0, top: 0, width: 1512, height: 982 }, workArea: { left: 0, top: 25, width: 1512, height: 957 } },
+            { id: '2', name: 'DELL U2723QE', isPrimary: false, bounds: { left: 1512, top: -200, width: 2560, height: 1440 }, workArea: { left: 1512, top: -175, width: 2560, height: 1415 } },
+          ]),
+        onDisplayChanged: { addListener() {} },
+      },
     },
     downloads: {
       // 設定画面プレビュー用。実際には保存せず、中身をコンソールに出す

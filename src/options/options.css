@@ -117,3 +117,33 @@ input[type="text"] {
 }
 input[type="text"]:focus { outline: none; border-color: var(--accent); }
 .ctl label { display: inline-flex; align-items: center; gap: 5px; margin-right: 14px; cursor: pointer; }
+
+select {
+  padding: 5px 8px;
+  background: #0e1116;
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font: inherit;
+  max-width: 100%;
+}
+select:focus { outline: none; border-color: var(--accent); }
+select:disabled, .ctl button:disabled { opacity: 0.4; }
+.ctl button { padding: 3px 10px; }
+
+/* ログウィンドウの配置図。ディスプレイの並びを縮小して描き、開く位置を重ねる */
+.lw-preview { position: relative; height: 150px; margin-top: 12px; border-top: 1px solid var(--line); }
+.lw-preview:empty { display: none; }
+.lw-preview .disp {
+  position: absolute;
+  border: 1px solid var(--line);
+  background: #0e1116;
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--dim);
+  padding: 2px 4px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.lw-preview .disp.on { border-color: var(--accent); color: var(--fg); }
+.lw-preview .win { position: absolute; background: rgba(127, 178, 255, 0.35); border: 1px solid var(--accent); border-radius: 2px; }

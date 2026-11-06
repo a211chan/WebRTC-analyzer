@@ -125,6 +125,9 @@
     $('sparkline').checked = !!cfg.sparkline;
     $('alerts').checked = !!cfg.alerts;
     $('autoStart').checked = !!cfg.autoStart;
+    for (const el of document.querySelectorAll('input[name="display"]')) el.checked = el.value === cfg.display;
+    $('scale').value = cfg.scale;
+    paintLogwin();
     $('toggleEnabled').textContent = cfg.enabled ? 'OFFにする' : 'ONにする';
     $('enabledState').textContent = cfg.enabled ? '現在: ON' : '現在: OFF';
 
@@ -165,6 +168,16 @@
     next.sparkline = $('sparkline').checked;
     next.alerts = $('alerts').checked;
     next.autoStart = $('autoStart').checked;
+    next.display = document.querySelector('input[name="display"]:checked')?.value || DEFAULTS.display;
+    const { SCALE, LOGWIN_SIZE } = WRA_CONFIG;
+    // 倍率は刻みに揃える（⊖ / ⊕ と同じ段階にする）
+    next.scale = Math.round(clampInt($('scale').value, SCALE.min, SCALE.max, DEFAULTS.scale) / SCALE.step) * SCALE.step;
+    next.logWindow.mode = document.querySelector('input[name="lwMode"]:checked')?.value || DEFAULTS.logWindow.mode;
+    next.logWindow.displayId = $('lwDisplay').value;
+    next.logWindow.anchor = $('lwAnchor').value;
+    next.logWindow.width = clampInt($('lwWidth').value, LOGWIN_SIZE.minW, LOGWIN_SIZE.maxW, DEFAULTS.logWindow.width);
+    next.logWindow.height = clampInt($('lwHeight').value, LOGWIN_SIZE.minH, LOGWIN_SIZE.maxH, DEFAULTS.logWindow.height);
+    next.logWindow.rememberLast = $('lwRemember').checked;
 
     for (const el of document.querySelectorAll('[data-field]')) {
       next.fields[el.dataset.field] = el.checked;
@@ -192,10 +205,17 @@
   }
 
   async function save() {
+    const prev = cfg;
     cfg = collect();
     // enabled は小窓の × とツールバーのアイコンが持つ状態なので、ここでは書かない
     const { enabled, ...rest } = cfg;
     await chrome.storage.local.set(rest);
+    // 配置を指定し直したら、手で動かした位置より新しい指定を優先する
+    const a = prev.logWindow;
+    const b = cfg.logWindow;
+    if (a.displayId !== b.displayId || a.anchor !== b.anchor || a.width !== b.width || a.height !== b.height || !b.rememberLast) {
+      await forgetLast();
+    }
     paint();
     flash('保存しました');
   }
@@ -209,6 +229,97 @@
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  }
+
+  // ------------------------------------------------------------ ログウィンドウ
+
+  /** chrome.system.display の一覧。拡張なしのプレビューでは取れないので空 */
+  let displays = [];
+  let hasLast = false;
+
+  async function loadDisplays() {
+    try {
+      displays = (await chrome.system.display.getInfo()) || [];
+    } catch (_) {
+      displays = [];
+    }
+    paintLogwin();
+  }
+
+  function displayLabel(d, i) {
+    const name = d.name && d.name.trim() ? d.name.trim() : `ディスプレイ ${i + 1}`;
+    return `${name}（${d.bounds.width}×${d.bounds.height}${d.isPrimary ? '・メイン' : ''}）`;
+  }
+
+  function paintLogwin() {
+    const lw = cfg.logWindow;
+    for (const el of document.querySelectorAll('input[name="lwMode"]')) el.checked = el.value === lw.mode;
+
+    const sel = $('lwDisplay');
+    const opts = [['', 'ブラウザと同じディスプレイ'], ...displays.map((d, i) => [d.id, displayLabel(d, i)])];
+    // 保存したディスプレイが今は繋がっていなくても、選択は消さずに残す
+    if (lw.displayId && !displays.some((d) => d.id === lw.displayId)) opts.push([lw.displayId, '接続されていないディスプレイ']);
+    sel.innerHTML = opts.map(([v, l]) => `<option value="${escapeHtml(v)}">${escapeHtml(l)}</option>`).join('');
+    sel.value = lw.displayId;
+    $('lwDisplayHint').textContent = displays.length
+      ? `${displays.length} 台を検出。指定したディスプレイが外れているときは、ブラウザと同じディスプレイに出す`
+      : 'ディスプレイの一覧を取得できませんでした。ブラウザと同じディスプレイに出す';
+
+    $('lwAnchor').value = lw.anchor;
+    $('lwWidth').value = lw.width;
+    $('lwHeight').value = lw.height;
+    $('lwRemember').checked = !!lw.rememberLast;
+    $('lwForget').disabled = !hasLast;
+    $('lwLastHint').textContent = hasLast
+      ? '手で動かした位置を記憶している。ディスプレイ・置き場所・大きさを変えると、記憶した位置は消える'
+      : 'ディスプレイ・置き場所・大きさを変えると、記憶した位置は消える';
+
+    // 配置はログウィンドウにだけ効く。⧉ が PiP で、表示先も小窓なら使われない
+    const unused = lw.mode === 'pip' && cfg.display === 'hud';
+    for (const id of ['lwDisplay', 'lwAnchor', 'lwWidth', 'lwHeight', 'lwRemember']) $(id).disabled = unused;
+    paintPreview(unused);
+  }
+
+  /** ディスプレイの並びを縮小して描き、ログウィンドウを開く位置を重ねる */
+  function paintPreview(unused) {
+    const box = $('lwPreview');
+    if (!displays.length || unused) {
+      box.innerHTML = '';
+      return;
+    }
+    const lw = cfg.logWindow;
+    const l = Math.min(...displays.map((d) => d.bounds.left));
+    const t = Math.min(...displays.map((d) => d.bounds.top));
+    const r = Math.max(...displays.map((d) => d.bounds.left + d.bounds.width));
+    const b = Math.max(...displays.map((d) => d.bounds.top + d.bounds.height));
+    const H = 130;
+    const k = Math.min(H / (b - t), (box.clientWidth || 600) / (r - l));
+    const px = (v) => `${Math.round(v * k)}px`;
+    const rect = (x) => `left:${px(x.left - l)};top:${px(x.top - t + 12 / k)};width:${px(x.width)};height:${px(x.height)}`;
+
+    // 「ブラウザと同じ」は開くまで決まらないので、このページを開いているディスプレイで描く
+    const here = displays.find((d) => {
+      const x = window.screenX + window.outerWidth / 2;
+      const y = window.screenY + window.outerHeight / 2;
+      return x >= d.bounds.left && x < d.bounds.left + d.bounds.width && y >= d.bounds.top && y < d.bounds.top + d.bounds.height;
+    });
+    const target = displays.find((d) => d.id === lw.displayId) || here || displays.find((d) => d.isPrimary) || displays[0];
+    const win = WRA_CONFIG.logwinRect(lw, target);
+
+    box.innerHTML =
+      displays
+        .map((d, i) => `<div class="disp${d === target ? ' on' : ''}" style="${rect(d.bounds)}">${escapeHtml(displayLabel(d, i))}</div>`)
+        .join('') + `<div class="win" style="${rect(win)}" title="ログウィンドウ"></div>`;
+  }
+
+  async function refreshLast() {
+    hasLast = !!(await chrome.storage.local.get('logwinLast')).logwinLast;
+    paintLogwin();
+  }
+
+  async function forgetLast() {
+    await chrome.storage.local.remove('logwinLast');
+    hasLast = false;
   }
 
   // ------------------------------------------------------------ 保存済みの履歴
@@ -330,7 +441,26 @@
 
     document.addEventListener('change', (e) => {
       // 履歴の選択チェックは設定ではない
-      if (e.target.matches('input:not([data-pick])')) save();
+      if (e.target.matches('input:not([data-pick]), select')) save();
+    });
+
+    await loadDisplays();
+    await refreshLast();
+    chrome.system?.display?.onDisplayChanged?.addListener(loadDisplays);
+    addEventListener('resize', () => paintLogwin());
+    $('lwForget').addEventListener('click', async () => {
+      await forgetLast();
+      paintLogwin();
+      flash('記憶した位置を消しました');
+    });
+    // ⊖ / ⊕ で変わった倍率と、ログウィンドウを動かして記憶した位置を追従させる
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local') return;
+      if (changes.scale) {
+        cfg.scale = merge({ scale: changes.scale.newValue }).scale;
+        $('scale').value = cfg.scale;
+      }
+      if (changes.logwinLast) refreshLast();
     });
 
     await paintSessions();
@@ -349,7 +479,8 @@
     });
 
     $('reset').addEventListener('click', async () => {
-      await chrome.storage.local.remove(KEYS.filter((k) => k !== 'enabled'));
+      await chrome.storage.local.remove([...KEYS.filter((k) => k !== 'enabled'), 'logwinLast']);
+      hasLast = false;
       cfg = structuredClone(DEFAULTS);
       paint();
       flash('既定値に戻しました');
