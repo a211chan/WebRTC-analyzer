@@ -110,6 +110,23 @@ chrome.runtime.onInstalled.addListener((d) => {
 });
 chrome.runtime.onStartup.addListener(applyAutoStart);
 
+// ------------------------------------------------------------- 更新
+
+/*
+ * ストア版で新しい版が届いたとき。計測中のタブは毎秒メッセージを送ってくるので SW が止まらず、
+ * Chrome は更新を当てられないまま待つ。設定画面に「更新して再起動」を出せるよう版を控えておく。
+ * 何もしなければ、これまでどおり SW が止まったときかブラウザの次回起動時に当たる。
+ */
+chrome.runtime.onUpdateAvailable.addListener((d) => {
+  chrome.storage.local.set({ updatePending: d.version });
+});
+// 当たったあと（SW の起動時）は控えを消す。古い版が残っていると設定画面に出続ける
+chrome.storage.local.get('updatePending').then(({ updatePending }) => {
+  if (updatePending && WRA_CONFIG.compareVersion(updatePending, chrome.runtime.getManifest().version) <= 0) {
+    chrome.storage.local.remove('updatePending');
+  }
+});
+
 /** ツールバーアイコンに現在の状態を出す */
 function paintBadge(enabled) {
   chrome.action.setBadgeText({ text: enabled ? 'ON' : '' });

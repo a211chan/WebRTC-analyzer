@@ -10,6 +10,24 @@
 <h1>WebRTC Analyzer <span class="sub">設定</span></h1>
 <p class="lead">変更は自動保存され、開いているタブに即座に反映されます。</p>
 
+<section id="versionSection">
+  <h2>バージョン</h2>
+  <div class="row">
+    <span class="label">バージョン</span>
+    <span class="ctl"><span id="version"></span></span>
+  </div>
+  <!-- ストア版だけ。zip 版（展開して読み込み）は更新を確認しない -->
+  <div class="row" id="updateRow" hidden>
+    <span class="label">更新</span>
+    <span class="ctl">
+      <span id="updateState" class="update-state"></span>
+      <button id="checkUpdate">今すぐ確認</button>
+      <button id="applyUpdate" hidden>更新して再起動</button>
+    </span>
+    <span class="hint" id="updateHint">Chrome ウェブストアに新しい版があるかを確認する。設定画面を開いたときにも自動で確認する（6時間に1回まで）</span>
+  </div>
+</section>
+
 <section>
   <h2>起動</h2>
 

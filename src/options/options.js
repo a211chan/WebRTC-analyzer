@@ -322,6 +322,115 @@
     hasLast = false;
   }
 
+  // ------------------------------------------------------------ バージョン
+
+  /*
+   * 拡張は自分のファイルを書き換えられないので、更新できるのは Chrome ウェブストア経由で
+   * 入れた場合だけ。zip を展開して読み込んだ版（development）はバージョンを出すだけで、
+   * 外部へは問い合わせない。確認は Chrome 自身の更新経路（requestUpdateCheck）を使う。
+   */
+  const UPDATE_EVERY_MS = 6 * 3600 * 1000;
+  const VERSION = chrome.runtime.getManifest().version;
+  const INSTALL_LABEL = { normal: 'Chrome ウェブストア版', admin: '管理者による配布', development: 'zip 版' };
+  let checking = false;
+
+  async function initVersion() {
+    const self = await chrome.management?.getSelf?.().catch(() => null);
+    const type = self?.installType || 'development';
+    const label = INSTALL_LABEL[type] || 'zip 版';
+    $('version').textContent = `v${VERSION}（${label}）`;
+    // 管理者による配布もストアと同じ更新経路に乗る
+    if (type !== 'normal' && type !== 'admin') return;
+
+    $('updateRow').hidden = false;
+    $('checkUpdate').addEventListener('click', () => checkUpdate());
+    $('applyUpdate').addEventListener('click', applyUpdate);
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && (changes.updatePending || changes.updateCheck)) paintUpdate();
+    });
+
+    const { updateCheck } = await chrome.storage.local.get('updateCheck');
+    // 前回の確認から版が変わっていれば（その間に更新が当たった）結果は使えない
+    const fresh = updateCheck?.ver === VERSION && Date.now() - updateCheck.at < UPDATE_EVERY_MS;
+    if (fresh) paintUpdate();
+    else checkUpdate();
+  }
+
+  async function checkUpdate() {
+    if (checking) return;
+    checking = true;
+    paintUpdate();
+    let r;
+    try {
+      r = await chrome.runtime.requestUpdateCheck();
+    } catch (e) {
+      r = { status: 'error' };
+    }
+    checking = false;
+    // 結果は storage に置き、6時間以内に開き直したときは問い合わせない（短時間に何度も呼ぶと throttled になる）
+    await chrome.storage.local.set({
+      updateCheck: { at: Date.now(), ver: VERSION, status: r.status, latest: r.version || null },
+    });
+    paintUpdate();
+  }
+
+  async function paintUpdate() {
+    const { updateCheck: c, updatePending } = await chrome.storage.local.get(['updateCheck', 'updatePending']);
+    const newer = (v) => v && WRA_CONFIG.compareVersion(v, VERSION) > 0;
+    const state = $('updateState');
+    let text;
+    let cls = '';
+    let ready = false;
+
+    if (newer(updatePending)) {
+      // onUpdateAvailable を受けた（ダウンロード済み）ので、再起動すれば当たる
+      text = `v${updatePending} があります`;
+      cls = 'new';
+      ready = true;
+    } else if (checking) {
+      text = '確認しています…';
+    } else if (c?.ver !== VERSION) {
+      text = '';
+    } else if (c.status === 'update_available' && newer(c.latest)) {
+      text = `v${c.latest} をダウンロードしています…`;
+      cls = 'new';
+    } else if (c.status === 'no_update') {
+      text = `最新です（最終確認 ${stamp(c.at)}）`;
+      cls = 'ok';
+    } else if (c.status === 'throttled') {
+      text = '確認が続いたため Chrome に断られました。しばらくしてから試してください';
+      cls = 'warn';
+    } else {
+      text = '確認できませんでした';
+      cls = 'warn';
+    }
+
+    state.textContent = text;
+    state.className = 'update-state ' + cls;
+    $('checkUpdate').disabled = checking;
+    $('checkUpdate').hidden = ready;
+    $('applyUpdate').hidden = !ready;
+    $('updateHint').textContent = ready
+      ? '再起動すると、開いているページの小窓はページを再読み込みするまで止まる。まだ保存していない直近数秒の履歴は失われる'
+      : 'Chrome ウェブストアに新しい版があるかを確認する。設定画面を開いたときにも自動で確認する（6時間に1回まで）';
+  }
+
+  function applyUpdate() {
+    const msg =
+      '拡張を更新して再起動します。\n\n' +
+      '開いているページの小窓は、ページを再読み込みするまで止まります。' +
+      'まだ保存していない直近数秒の履歴は失われます。\n\nよろしいですか？';
+    if (!confirm(msg)) return;
+    // 再起動で設定画面も閉じる。保留中の更新はこの再起動で当たる
+    chrome.runtime.reload();
+  }
+
+  function stamp(ms) {
+    const d = new Date(ms);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+
   // ------------------------------------------------------------ 保存済みの履歴
 
   const { listSessions, loadRows, removeSessions, build, dataUrl, filename, localStamp } = WRA_EXPORT;
@@ -428,6 +537,7 @@
     buildReport();
     cfg = merge(await chrome.storage.local.get(KEYS));
     paint();
+    initVersion();
 
     $('toggleEnabled').addEventListener('click', async () => {
       await chrome.storage.local.set({ enabled: !cfg.enabled });

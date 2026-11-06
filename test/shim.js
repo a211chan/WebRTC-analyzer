@@ -28,6 +28,22 @@
         return Promise.resolve();
       },
       onMessage: { addListener: (fn) => msgListeners.push(fn) },
+      // overlay.js は id が無いと「拡張から切り離された」とみなして描画をやめる
+      id: 'shim',
+      getManifest: () => ({ version: '1.0.0' }),
+      // 設定画面プレビュー用の更新確認。?update=available で新しい版がある体にする
+      requestUpdateCheck() {
+        if (!location.search.includes('update=available')) return Promise.resolve({ status: 'no_update' });
+        // 実物と同じく、ダウンロードが済んでから onUpdateAvailable（sw.js が updatePending を書く）が来る
+        setTimeout(() => chrome.storage.local.set({ updatePending: '1.1.0' }), 1500);
+        return Promise.resolve({ status: 'update_available', version: '1.1.0' });
+      },
+      reload: () => console.log('[shim] runtime.reload'),
+    },
+    // ?install=development で zip 版（バージョン表記だけ）の見え方にする
+    management: {
+      getSelf: () =>
+        Promise.resolve({ installType: (location.search.match(/install=(\w+)/) || [])[1] || 'normal' }),
     },
     storage: {
       local: {

@@ -39,7 +39,9 @@
 - 「今すぐ確認」は間隔を無視して確認する。`throttled` が返ったら「しばらくしてから」と出す
 
 **ストア版の適用（sw.js）**
-- `chrome.runtime.onUpdateAvailable` を受けて `storage.local.updatePending = details.version` を書く。このリスナーを登録すると Chrome は自動で更新を当てなくなるので、設定画面で適用されない限りは次回のブラウザ起動時に当たる（現状と同じ挙動）
+- `chrome.runtime.onUpdateAvailable` を受けて `storage.local.updatePending = details.version` を書く。リスナーを登録しても、これまでどおり SW が止まったとき（計測中のタブがあると止まらない）かブラウザの次回起動時に自動で当たる。SW の起動時に `updatePending` がいまの版以下なら消す
+- `requestUpdateCheck` が `update_available` を返した時点ではまだダウンロード中のことがあるので、「更新して再起動」は `updatePending` が来てから出す（それまでは「ダウンロードしています…」）
+- `management.getSelf()` が `admin`（ポリシーでの配布）の場合もストアと同じ更新経路なので、ストア版と同じ扱いにする
 - 設定画面の「更新して再起動」は `chrome.runtime.reload()` を呼ぶ。SW 経由にせず設定画面から直接呼べる
 
 **適用時の副作用（要対応）**

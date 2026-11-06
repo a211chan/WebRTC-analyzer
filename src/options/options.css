@@ -147,3 +147,12 @@ select:disabled, .ctl button:disabled { opacity: 0.4; }
 }
 .lw-preview .disp.on { border-color: var(--accent); color: var(--fg); }
 .lw-preview .win { position: absolute; background: rgba(127, 178, 255, 0.35); border: 1px solid var(--accent); border-radius: 2px; }
+
+/* バージョン */
+.update-state { color: var(--dim); }
+.update-state:not(:empty)::before { content: "● "; }
+.update-state.ok::before { color: #5bd17a; }
+.update-state.new { color: var(--fg); }
+.update-state.new::before { color: var(--accent); }
+.update-state.warn::before { color: #ffb454; }
+#version { font-variant-numeric: tabular-nums; }

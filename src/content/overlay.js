@@ -522,6 +522,10 @@
   // ------------------------------------------------------------- 描画
 
   function render() {
+    // 拡張が更新・再読み込みされると、このスクリプトは拡張から切り離される（chrome.runtime.id が消える）。
+    // 新しい版はページを再読み込みするまで入らないので、止まった理由を出して描画をやめる
+    if (!chrome.runtime?.id) return detached();
+
     const show = shouldShow();
 
     if (!show) {
@@ -587,6 +591,14 @@
     chrome.runtime
       .sendMessage({ __wraChannel: CHANNEL, type: 'mirror', html, alarms, host: location.host || 'page' })
       .catch(() => {});
+  }
+
+  function detached() {
+    tick(0);
+    // 表示していなかったなら何も出さない（ログウィンドウは再起動で閉じている）
+    if (!hud || !hostEl?.isConnected) return;
+    body.innerHTML = '<div class="empty">拡張が更新されました。<br>ページを再読み込みしてください。</div>';
+    hud.querySelector('.alarm').hidden = true;
   }
 
   function tick(ms) {

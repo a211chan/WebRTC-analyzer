@@ -251,5 +251,19 @@
     }
   }
 
-  globalThis.WRA_CONFIG = { DEFAULTS, KEYS, ANCHORS, SCALE, LOGWIN_SIZE, merge, load, logwinRect };
+  /**
+   * 拡張の版（"1.10.0" など）を数値として比べる。a が新しければ正、同じなら 0。
+   * 文字列のまま比べると "1.10.0" < "1.9.0" になる。
+   */
+  function compareVersion(a, b) {
+    const pa = String(a).split('.').map(Number);
+    const pb = String(b).split('.').map(Number);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const d = (pa[i] || 0) - (pb[i] || 0);
+      if (d) return d;
+    }
+    return 0;
+  }
+
+  globalThis.WRA_CONFIG = { DEFAULTS, KEYS, ANCHORS, SCALE, LOGWIN_SIZE, merge, load, logwinRect, compareVersion };
 })();
