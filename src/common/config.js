@@ -14,6 +14,27 @@
     enabled: false,
     /** ブラウザ起動時・インストール時に自動で表示ONにするか。OFFなら起動のたびにOFFへ戻す */
     autoStart: false,
+    /** 表示を ON にしたときの表示先。'hud' = ページ内の小窓 / 'window' = ログウィンドウ */
+    display: 'hud',
+    /** 小窓・ログウィンドウの表示倍率(%) */
+    scale: 100,
+    /*
+     * 別ウィンドウ（小窓の ⧉）。
+     *   mode 'window' : 拡張のページを chrome.windows で開く。ディスプレイと位置を指定できる
+     *   mode 'pip'    : Document Picture-in-Picture。常に最前面だが位置は指定できない
+     * display: 'window' で ON にしたときは、PiP がユーザー操作なしでは開けないため常に 'window' で開く。
+     */
+    logWindow: {
+      mode: 'window',
+      /** chrome.system.display の id。空なら小窓を開いたブラウザウィンドウと同じディスプレイ */
+      displayId: '',
+      /** ディスプレイの作業領域内での置き場所 */
+      anchor: 'top-right',
+      width: 360,
+      height: 480,
+      /** 手で動かした・広げた位置と大きさを次回に使う（保存先は logwinLast） */
+      rememberLast: true,
+    },
     /** getStats() のポーリング間隔(ms)。patch.js へ postMessage で伝える */
     intervalMs: 1000,
     /** スパークライン（折れ線）を出すか */
@@ -139,14 +160,30 @@
 
   const KEYS = Object.keys(DEFAULTS);
 
-  /** 保存済みの値を既定値に重ねる。入れ子（fields / thresholds / report）は項目単位でマージする */
+  const ANCHORS = ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center'];
+  const SCALE = { min: 50, max: 200, step: 10 };
+  const LOGWIN_SIZE = { minW: 240, maxW: 1600, minH: 200, maxH: 1600 };
+
+  /** 保存済みの値を既定値に重ねる。入れ子（fields / thresholds / report / logWindow）は項目単位でマージする */
   function merge(stored) {
     const out = structuredClone(DEFAULTS);
     if (!stored) return out;
 
     for (const k of KEYS) {
-      if (k === 'fields' || k === 'thresholds' || k === 'report') continue;
+      if (k === 'fields' || k === 'thresholds' || k === 'report' || k === 'logWindow') continue;
+      if (k === 'display' || k === 'scale') continue;
       if (stored[k] != null) out[k] = stored[k];
+    }
+    if (stored.display === 'hud' || stored.display === 'window') out.display = stored.display;
+    if (Number.isFinite(stored.scale)) out.scale = clamp(Math.round(stored.scale), SCALE.min, SCALE.max);
+    const w = stored.logWindow;
+    if (w && typeof w === 'object') {
+      if (w.mode === 'window' || w.mode === 'pip') out.logWindow.mode = w.mode;
+      if (typeof w.displayId === 'string') out.logWindow.displayId = w.displayId;
+      if (ANCHORS.includes(w.anchor)) out.logWindow.anchor = w.anchor;
+      if (Number.isFinite(w.width)) out.logWindow.width = clamp(Math.round(w.width), LOGWIN_SIZE.minW, LOGWIN_SIZE.maxW);
+      if (Number.isFinite(w.height)) out.logWindow.height = clamp(Math.round(w.height), LOGWIN_SIZE.minH, LOGWIN_SIZE.maxH);
+      if (typeof w.rememberLast === 'boolean') out.logWindow.rememberLast = w.rememberLast;
     }
     if (stored.fields) {
       for (const [k, v] of Object.entries(stored.fields)) {
@@ -178,6 +215,34 @@
     return out;
   }
 
+  function clamp(v, lo, hi) {
+    return Math.min(hi, Math.max(lo, v));
+  }
+
+  /** ログウィンドウをディスプレイの端から離す距離 */
+  const LOGWIN_MARGIN = 16;
+
+  /**
+   * ログウィンドウを開く矩形。display は chrome.system.display.getInfo() の1件。
+   * Service Worker（実際に開く）と設定画面（配置図）で同じ計算を使う。
+   */
+  function logwinRect(lw, display) {
+    const a = display.workArea;
+    const m = LOGWIN_MARGIN;
+    const width = Math.max(1, Math.min(lw.width, a.width - m * 2));
+    const height = Math.max(1, Math.min(lw.height, a.height - m * 2));
+    const right = a.left + a.width - width - m;
+    const bottom = a.top + a.height - height - m;
+    const [left, top] = {
+      'top-left': [a.left + m, a.top + m],
+      'top-right': [right, a.top + m],
+      'bottom-left': [a.left + m, bottom],
+      'bottom-right': [right, bottom],
+      center: [a.left + (a.width - width) / 2, a.top + (a.height - height) / 2],
+    }[lw.anchor] || [right, a.top + m];
+    return { left: Math.round(left), top: Math.round(top), width: Math.round(width), height: Math.round(height) };
+  }
+
   async function load() {
     try {
       return merge(await chrome.storage.local.get(KEYS));
@@ -186,5 +251,19 @@
     }
   }
 
-  globalThis.WRA_CONFIG = { DEFAULTS, KEYS, merge, load };
+  /**
+   * 拡張の版（"1.10.0" など）を数値として比べる。a が新しければ正、同じなら 0。
+   * 文字列のまま比べると "1.10.0" < "1.9.0" になる。
+   */
+  function compareVersion(a, b) {
+    const pa = String(a).split('.').map(Number);
+    const pb = String(b).split('.').map(Number);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const d = (pa[i] || 0) - (pb[i] || 0);
+      if (d) return d;
+    }
+    return 0;
+  }
+
+  globalThis.WRA_CONFIG = { DEFAULTS, KEYS, ANCHORS, SCALE, LOGWIN_SIZE, merge, load, logwinRect, compareVersion };
 })();

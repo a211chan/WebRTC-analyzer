@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>WebRTC Analyzer — ログウィンドウ プレビュー（拡張なし）</title>
+<style>html, body { margin: 0; height: 100%; background: rgb(18, 20, 24); }</style>
+
+<!-- chrome.* が無い素のページなので、先にエミュレータを入れる -->
+<script src="shim.js"></script>
+<script>
+/*
+ * shim.js に無いログウィンドウ用の API を足す。
+ * 対象タブ（id 1）の overlay.js の代わりに、描画結果を onMessage へ流し込む。
+ * ?evil を付けると、サニタイズの確認用に危険な要素を混ぜる。
+ */
+(() => {
+  const msg = [];
+  const session = { logwin: { windowId: 9, tabId: 1, follow: true } };
+  chrome.storage.session = { get: (k) => Promise.resolve({ [k]: session[k] }) };
+  chrome.runtime.onMessage = { addListener: (fn) => msg.push(fn) };
+  chrome.runtime.openOptionsPage = () => console.log('[preview] openOptionsPage');
+  chrome.tabs = {
+    sendMessage: (tabId, m) => {
+      console.log('[preview] tabs.sendMessage', tabId, m.cmd);
+      return Promise.resolve({ note: m.cmd === 'refresh' ? '' : `${m.cmd} を実行しました` });
+    },
+    onRemoved: { addListener() {} },
+  };
+  const evil = location.search.includes('evil')
+    ? '<img src=x onerror="window.__pwned=1"><script>window.__pwned=2<\/script><a href="javascript:alert(1)">x</a><div onclick="window.__pwned=3" class="empty">evil</div>'
+    : '';
+  const html =
+    '<div class="pc"><div class="pc-head"><span class="src">example.com · pc1</span><span class="state state-connected">connected</span></div>' +
+    '<div class="metrics"><div><span class="k">rtt</span><span class="v warn">120 ms</span></div></div></div>' + evil;
+  setTimeout(() => msg.forEach((fn) => fn({ __wraChannel: 'webrtc-analyzer', type: 'mirror', html, alarms: 2, host: 'example.com' }, { tab: { id: 1 }, frameId: 0 })), 300);
+})();
+</script>
+<script src="../src/common/config.js"></script>
+<script src="../src/content/overlay-style.js"></script>
+</head>
+<body>
+<script src="../src/logwin/logwin.js"></script>
+</body>
+</html>

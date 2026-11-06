@@ -37,7 +37,11 @@
   const history = new Map();
 
   let collapsed = false;
-  let pos = null; // ドラッグで動かした位置 {left, top}
+  /*
+   * ドラッグで動かした位置 {left, top}。保存はしない。表示を OFF にしたとき・
+   * ログウィンドウから戻ったとき・ページを読み直したときは右上（拡張アイコンの近く）に戻す。
+   */
+  let pos = null;
   let hud = null;
   let body = null;
   let hostEl = null;
@@ -47,11 +51,29 @@
   /** Document Picture-in-Picture で開いた別ウィンドウ。null なら通常のページ内表示 */
   let pipWin = null;
   const CAN_PIP = IS_TOP && 'documentPictureInPicture' in window;
+  /*
+   * ログウィンドウ（拡張のページを chrome.windows で開いたもの）がこのタブを映しているか。
+   * true の間はページ内の小窓を出さず、描画結果を runtime.sendMessage でログウィンドウへ流す。
+   * Service Worker が全フレームへ知らせるので、子フレームも全画面時の小窓を出さなくなる。
+   */
+  let mirrored = false;
+  /** 直前に流した描画結果。変化が無ければ送らない */
+  let lastMirror = '';
 
   // ------------------------------------------------------------- 受信
 
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (!msg || msg.__wraChannel !== CHANNEL || msg.type !== 'stats') return;
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (!msg || msg.__wraChannel !== CHANNEL) return;
+    if (msg.type === 'logwin') {
+      setMirrored(msg.open === true);
+      return;
+    }
+    if (msg.type === 'logwin-cmd') {
+      if (!IS_TOP) return;
+      runCommand(msg.cmd).then((text) => sendResponse({ note: text }));
+      return true; // 非同期で応答する
+    }
+    if (msg.type !== 'stats') return;
     // 形の検証は bridge.js で済んでいるが、ここは Service Worker 越しの入口でもある。
     // 落ちると小窓が二度と復帰しないので、最低限の形だけは自分でも確かめる。
     if (!Array.isArray(msg.pcs)) return;
@@ -225,22 +247,19 @@
     if (hud) applyState();
   });
 
-  /*
-   * 小窓の位置は storage.local に置かない。local は全タブ共通なので、片方のタブで
-   * 動かすと storage.onChanged が他のタブにも飛び、開いている小窓がいっせいに
-   * 同じ場所へ移動してしまう。位置は Service Worker がタブ単位で覚える。
-   */
+  // ページを読み直したときに、ログウィンドウがこのタブを映しているかを確かめる
   chrome.runtime
-    .sendMessage({ __wraChannel: CHANNEL, type: 'ui-get' })
+    .sendMessage({ __wraChannel: CHANNEL, type: 'logwin-get' })
     .then((v) => {
-      pos = v?.pos || null;
-      if (hud) applyState();
+      if (v?.open === true) setMirrored(true);
     })
     .catch(() => {});
 
   chrome.storage.onChanged.addListener(async (changes, area) => {
     if (area !== 'local') return;
     if (changes.collapsed) collapsed = changes.collapsed.newValue === true;
+    // ON/OFF を切り替えたら、動かした位置は捨てて右上から出し直す
+    if (changes.enabled) pos = null;
     if (WRA_CONFIG.KEYS.some((k) => k in changes)) cfg = await WRA_CONFIG.load();
     if (hud) applyState();
     render();
@@ -257,7 +276,7 @@
   function shouldShow() {
     if (!cfg.enabled) return false;
     // 別ウィンドウに出しているあいだはページの全画面状態に左右されない
-    if (pipWin) return live().length > 0 || history.size > 0;
+    if (pipWin || mirrored) return live().length > 0 || history.size > 0;
 
     const fs = fullscreenEl();
     // <video> や <iframe> は子要素を描画しないので、その上には重ねられない。
@@ -300,7 +319,9 @@
       <header>
         <span class="title">WebRTC Analyzer</span>
         <span class="alarm" hidden></span>
-        ${CAN_PIP ? '<button data-act="pip" title="別ウィンドウに出す（動画を直接全画面にするプレーヤーでも見える）">⧉</button>' : ''}
+        <button data-act="zoom-out" title="縮小">⊖</button>
+        <button data-act="zoom-in"  title="拡大">⊕</button>
+        ${IS_TOP ? '<button data-act="pip">⧉</button>' : ''}
         <button data-act="export"   title="エクスポート">⤓</button>
         <button data-act="options"  title="設定">⚙</button>
         <button data-act="collapse" title="折りたたみ">–</button>
@@ -335,7 +356,8 @@
     else if (act === 'close') chrome.storage.local.set({ enabled: false });
     else if (act === 'options') chrome.runtime.sendMessage({ __wraChannel: CHANNEL, type: 'open-options' });
     else if (act === 'export') menuEl.hidden = !menuEl.hidden;
-    else if (act === 'pip') togglePip();
+    else if (act === 'pip') openWindow();
+    else if (act === 'zoom-in' || act === 'zoom-out') zoom(act === 'zoom-in' ? 1 : -1);
     else if (act === 'csv') exportFile('csv');
     else if (act === 'json') exportFile('json');
     else if (act === 'clear') {
@@ -344,11 +366,61 @@
     }
   }
 
+  /** 表示倍率を1段階変える。storage に書くので設定画面・ログウィンドウ・他のタブも追従する */
+  function zoom(dir) {
+    const { min, max, step } = WRA_CONFIG.SCALE;
+    const next = Math.min(max, Math.max(min, (cfg.scale || 100) + dir * step));
+    if (next !== cfg.scale) chrome.storage.local.set({ scale: next });
+  }
+
+  /** ⧉。設定に応じてログウィンドウか PiP を開く */
+  function openWindow() {
+    if (cfg.logWindow.mode === 'pip') {
+      if (CAN_PIP) togglePip();
+      else note('このブラウザは Picture-in-Picture の別ウィンドウに対応していません');
+      return;
+    }
+    menuEl.hidden = true;
+    chrome.runtime
+      .sendMessage({ __wraChannel: CHANNEL, type: 'logwin-open' })
+      .catch(() => note('別ウィンドウを開けませんでした。拡張を再読み込みしてください'));
+  }
+
+  function setMirrored(on) {
+    if (mirrored === on) return;
+    mirrored = on;
+    lastMirror = '';
+    // ログウィンドウから戻ったら右上から出し直す
+    if (!on) pos = null;
+    if (hud) applyState();
+    render();
+  }
+
+  /** ログウィンドウのボタンから。結果の文言を返してログウィンドウ側に出してもらう */
+  async function runCommand(cmd) {
+    if (cmd === 'csv' || cmd === 'json') return exportFile(cmd);
+    if (cmd === 'clear') {
+      history.clear();
+      render();
+      return note('履歴をクリアしました（保存済みの履歴は設定画面から消せます）');
+    }
+    // ログウィンドウが開いた直後。それまでに送った描画結果は届いていないので出し直す
+    if (cmd === 'refresh') {
+      lastMirror = '';
+      render();
+    }
+    return '';
+  }
+
+  /** メニューの下に結果を出す。ログウィンドウにも同じ文言を返せるよう text を返す */
   function note(text) {
-    const el = menuEl.querySelector('.menu-note');
-    el.textContent = text;
-    clearTimeout(note.t);
-    note.t = setTimeout(() => (el.textContent = ''), 4000);
+    if (menuEl) {
+      const el = menuEl.querySelector('.menu-note');
+      el.textContent = text;
+      clearTimeout(note.t);
+      note.t = setTimeout(() => (el.textContent = ''), 4000);
+    }
+    return text;
   }
 
   /*
@@ -370,6 +442,7 @@
       w.addEventListener('pagehide', () => {
         pipWin = null;
         hud.classList.remove('pip');
+        pos = null;
         applyState();
         render();
       });
@@ -385,18 +458,35 @@
   function applyState() {
     hud.classList.toggle('collapsed', collapsed);
     hud.classList.toggle('spark', !!cfg.sparkline);
+    /*
+     * CSS の zoom は要素自身の left / top / right にも掛かるので、位置は倍率で割って指定する。
+     * ドラッグの座標（clientX）と getBoundingClientRect() は倍率込みの実寸で来る。
+     */
+    const z = (cfg.scale || 100) / 100;
+    hud.style.zoom = String(z);
+    const split = hud.querySelector('[data-act="pip"]');
+    if (split) {
+      split.title =
+        cfg.logWindow.mode === 'pip'
+          ? '別ウィンドウに出す（常に最前面。動画を直接全画面にするプレーヤーでも見える）'
+          : '別ウィンドウに出す（設定画面で指定したディスプレイ・位置に開く）';
+    }
     if (collapsed) menuEl.hidden = true;
+    // ウィンドウいっぱいに広げる高さも zoom で拡大されるので、倍率で割る
+    hud.style.minHeight = pipWin ? `${100 / z}vh` : '';
+    body.style.maxHeight = pipWin ? `calc(${100 / z}vh - 32px)` : '';
     if (pipWin) {
       // 別ウィンドウ内ではウィンドウ自体を動かすので、位置指定は使わない
       hud.style.left = hud.style.top = hud.style.right = '';
     } else if (pos) {
-      hud.style.left = clamp(pos.left, 0, Math.max(0, innerWidth - 120)) + 'px';
-      hud.style.top = clamp(pos.top, 0, Math.max(0, innerHeight - 28)) + 'px';
+      hud.style.left = clamp(pos.left, 0, Math.max(0, innerWidth - 120 * z)) / z + 'px';
+      hud.style.top = clamp(pos.top, 0, Math.max(0, innerHeight - 28 * z)) / z + 'px';
       hud.style.right = 'auto';
     } else {
+      // 既定は右上。ツールバーの拡張アイコンにいちばん近い場所
       hud.style.left = 'auto';
-      hud.style.right = '12px';
-      hud.style.top = '12px';
+      hud.style.right = 12 / z + 'px';
+      hud.style.top = 12 / z + 'px';
     }
   }
 
@@ -426,27 +516,55 @@
     function onUp(e) {
       handle.removeEventListener('pointermove', onMove);
       handle.releasePointerCapture(e.pointerId);
-      if (pos) chrome.runtime.sendMessage({ __wraChannel: CHANNEL, type: 'ui-set', pos }).catch(() => {});
     }
   }
 
   // ------------------------------------------------------------- 描画
 
   function render() {
+    // 拡張が更新・再読み込みされると、このスクリプトは拡張から切り離される（chrome.runtime.id が消える）。
+    // 新しい版はページを再読み込みするまで入らないので、止まった理由を出して描画をやめる
+    if (!chrome.runtime?.id) return detached();
+
     const show = shouldShow();
 
     if (!show) {
       if (hostEl && hostEl.parentNode) hostEl.remove();
+      // 表示は ON のまま何も無いときも、ログウィンドウには「接続なし」を出す
+      if (mirrored && IS_TOP && cfg.enabled) mirror(stopped(), 0);
       if (!store.size) idle();
       return;
     }
 
     if (!hostEl) build();
 
+    // ログウィンドウに映している間は、ページ内の小窓は外して描画結果だけ流す
+    if (mirrored) {
+      if (hostEl.parentNode) hostEl.remove();
+      if (!IS_TOP) return;
+      const { html, alarms } = compose();
+      mirror(html, alarms);
+      if (!store.size) idle();
+      return;
+    }
+
     // フルスクリーン要素があればその配下へ移す（トップレイヤーに入れるため）
     const parent = pipWin ? pipWin.document.body : fullscreenEl() || document.documentElement;
     if (hostEl.parentNode !== parent) parent.appendChild(hostEl);
 
+    const { html, alarms } = compose();
+    body.innerHTML = html;
+
+    const alarm = hud.querySelector('.alarm');
+    alarm.hidden = !(cfg.alerts && alarms > 0);
+    alarm.textContent = alarms > 0 ? `⚠ ${alarms}` : '';
+
+    // 受信が途切れたら描画を緩める。小窓自体は履歴を保存できるよう残したまま。
+    if (!store.size) idle();
+  }
+
+  /** 小窓の本文の HTML と、重大(crit)の数。ページ内の小窓とログウィンドウで共通 */
+  function compose() {
     const entries = live().sort(
       (a, b) => a[1].host.localeCompare(b[1].host) || a[1].pc.id.localeCompare(b[1].pc.id)
     );
@@ -458,14 +576,29 @@
       return r.html;
     });
 
-    body.innerHTML = html.join('') || stopped();
+    return { html: html.join('') || stopped(), alarms };
+  }
 
-    const alarm = hud.querySelector('.alarm');
-    alarm.hidden = !(cfg.alerts && alarms > 0);
-    alarm.textContent = alarms > 0 ? `⚠ ${alarms}` : '';
+  /*
+   * ログウィンドウへ描画結果を流す。ログウィンドウは拡張のページなので runtime.sendMessage が
+   * そのまま届き、送り元のタブは sender.tab で分かる。ページ側からは見えない経路。
+   * 中身が変わらないあいだは送らない（受信停止後の5秒ごとの再描画など）。
+   */
+  function mirror(html, alarms) {
+    const key = alarms + '|' + html;
+    if (key === lastMirror) return;
+    lastMirror = key;
+    chrome.runtime
+      .sendMessage({ __wraChannel: CHANNEL, type: 'mirror', html, alarms, host: location.host || 'page' })
+      .catch(() => {});
+  }
 
-    // 受信が途切れたら描画を緩める。小窓自体は履歴を保存できるよう残したまま。
-    if (!store.size) idle();
+  function detached() {
+    tick(0);
+    // 表示していなかったなら何も出さない（ログウィンドウは再起動で閉じている）
+    if (!hud || !hostEl?.isConnected) return;
+    body.innerHTML = '<div class="empty">拡張が更新されました。<br>ページを再読み込みしてください。</div>';
+    hud.querySelector('.alarm').hidden = true;
   }
 
   function tick(ms) {
@@ -728,12 +861,10 @@
     return rows;
   }
 
+  /** 結果の文言で解決する Promise を返す（ログウィンドウから呼ばれたときに返すため） */
   function exportFile(kind) {
     const rows = allRows();
-    if (!rows.length) {
-      note('まだ履歴がありません');
-      return;
-    }
+    if (!rows.length) return Promise.resolve(note('まだ履歴がありません'));
 
     const { text, mime } = WRA_EXPORT.build(kind, rows);
 
@@ -744,7 +875,7 @@
      * 品質ログを渡すことになる。Service Worker の chrome.downloads に投げれば、
      * ページ側からは保存の事実すら見えない。
      */
-    chrome.runtime
+    return chrome.runtime
       .sendMessage({
         __wraChannel: CHANNEL,
         type: 'download',
@@ -752,8 +883,8 @@
         filename: WRA_EXPORT.filename(kind),
       })
       .then((res) => {
-        if (res && res.ok) note(`${rows.length} 行を書き出しました`);
-        else note(`保存できませんでした: ${res?.error ?? '不明なエラー'}`);
+        if (res && res.ok) return note(`${rows.length} 行を書き出しました`);
+        return note(`保存できませんでした: ${res?.error ?? '不明なエラー'}`);
       })
       .catch(() => note('保存できませんでした。拡張を再読み込みしてください'));
   }
